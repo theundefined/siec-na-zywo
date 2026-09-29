@@ -166,7 +166,7 @@ Ceny gazu dla gospodarstw domowych (`nrg_pc_202`) dla Polski kończą się na 20
 - Źródła są niezależne: gdy któreś zawiedzie, skrypt zapisuje ostatnią opublikowaną kopię z GitHub Pages (z polem `stale`),
   więc wdrożenie nie pada. Każdy plik ma `fetched` i `dataAsOf`.
 - `staleNote()` w `common.js` pokazuje ostrzeżenie, gdy dane są starsze niż zwykle dla źródła (ENTSOG 3 dni, TGE 3 dni,
-  ARE 75 dni, Eurostat miesięczny gaz 75 / prąd 150 dni, roczny 640 dni, `przesyly.json` 20 min, pomiary PSE dziś 2 godz.)
+  ARE 120 dni, Eurostat miesięczny gaz 90 / prąd 150 dni, roczny 820 dni, `przesyly.json` 20 min, pomiary PSE dziś 2 godz.)
   albo gdy plik z workflow nie był odświeżany od > 30 godz.
 - **GitHub wyłącza zaplanowane workflow w publicznych repozytoriach po ok. 60 dniach bez aktywności w repozytorium** —
   wtedy ostrzeżenia o nieodświeżanych plikach są jedynym sygnałem; wystarczy dowolny commit albo ręczne uruchomienie workflow.
@@ -179,7 +179,8 @@ używany na publicznej stronie — wymagałby zgody JAO (contact@jao.eu).
 ### Dłuższe zakresy, wybór kraju, parametry cen
 - Gaz dziennie: 30 / 90 dni, 12 miesięcy, 2 lata, 5 lat. ENTSOG archiwizuje dane starsze niż 5 lat (zapytanie zwraca komunikat
   o archiwum), więc maksimum to 1820 dni; pobieranie porcjami po roku. Powyżej ~400 dni wykresy pokazują średnie tygodniowe
-  (`slice()` w `gas.js`, energia w okresie przez `esum` × liczba dób w przedziale).
+  (`slice()` w `gas.js`, energia w okresie przez `esum` × liczba dób w przedziale). Porcje są przetwarzane od razu (mało pamięci),
+  pobranie 5 lat trwa ok. 25 s; zakresy dłuższe niż rok nie są zapamiętywane (każda wizyta startuje od najwyżej 12 miesięcy).
 - Przed maj 2022 działały punkty z Białorusi: `ITP-00104` Kondratki (gazociąg jamalski, PL-TSO-0001), `ITP-00092` Wysokoje,
   `ITP-00094` Tietierowka — grupa „Import z Białorusi”; tranzyt jamalski do Niemiec to eksport przez Mallnow (`ITP-00096` exit).
   Bilans wejścia − wyjścia na 5 latach: −20…+50 GWh/d (średnie tygodniowe) przy obrocie ~500 GWh/d.

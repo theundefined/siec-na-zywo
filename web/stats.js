@@ -180,7 +180,7 @@ export async function renderElecYear() {
           <div class="utrack"><span class="ubar" style="width:${mx > 0 ? (Math.max(0, v) / mx) * 100 : 0}%;background:${x.color}"></span></div>
           <div class="uval"><b>${twh(v)}</b> <span class="muted">${pc((v / total) * 100)}</span></div></div>`).join('')}</div>`;
       };
-      box.innerHTML = staleNote({ what: 'roczne Eurostatu o prądzie', asOf: years[n - 1], maxDays: 640 }) + yearSelect('elec-y-year', years, Y) +
+      box.innerHTML = staleNote({ what: 'roczne Eurostatu o prądzie', asOf: years[n - 1], maxDays: 820 }) + yearSelect('elec-y-year', years, Y) +
         tilesHtml([
           { l: `Produkcja brutto ${Y}`, v: twh(tot), d: `OZE: ${pc((ren / tot) * 100)}, węgiel: ${pc(((at('wk', vals) + at('wb', vals)) / tot) * 100)}${at('nuc', vals) > 0.005 ? `, atom: ${pc((at('nuc', vals) / tot) * 100)}` : ''}` },
           { l: 'Import − eksport', v: `${imp - exp >= 0 ? '+' : '−'}${twh(Math.abs(imp - exp))}`, d: `import ${twh(imp)}, eksport ${twh(exp)}` },

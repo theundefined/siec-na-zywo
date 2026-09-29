@@ -530,7 +530,7 @@ async function renderUtil({ silent = false } = {}) {
           <div class="uval">śr. <b>${pct(st.avg)}</b> <span class="muted">maks. ${pct(st.max)} · ostatnio ${pct(st.last)}</span></div></div>`;
       })
       .join('');
-    box.innerHTML = staleNote({ what: 'o mocy osiągalnej (ARE)', asOf: CAP.asOf, maxDays: 75, fetched: CAP.fetched, stale: CAP.stale }) + `<div class="legend"><span class="key"><i class="sw" style="background:var(--ink-2)"></i>średnie wykorzystanie w dobie</span><span class="key"><i class="plan-key"></i>maksimum w dobie</span></div>
+    box.innerHTML = staleNote({ what: 'o mocy osiągalnej (ARE)', asOf: CAP.asOf, maxDays: 120, fetched: CAP.fetched, stale: CAP.stale }) + `<div class="legend"><span class="key"><i class="sw" style="background:var(--ink-2)"></i>średnie wykorzystanie w dobie</span><span class="key"><i class="plan-key"></i>maksimum w dobie</span></div>
       <div class="util">${rowsHtml}</div>` +
       '<h3 class="sub-h">Wykorzystanie w ciągu doby</h3>' + '<div class="chart" id="util-chart"></div>' +
       table(['Okres', ...CAP.groups.map((g) => g.name + ' [%]')], grid.starts.map((_, i) => [period(grid, i), ...series.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i])))])) +

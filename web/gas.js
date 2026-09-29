@@ -11,13 +11,12 @@ const OPERATORS = ['PL-TSO-0002', 'PL-TSO-0001'];
 const MAX_HISTORY = 1820;
 
 // Dłuższe okresy pobieramy porcjami po roku (duże zapytania z limit=-1 bywają odrzucane).
-async function entsogRange(operator, from, to) {
-  const out = [];
+// Każda porcja jest przetwarzana od razu (onRows), żeby przy 5 latach nie trzymać w pamięci wszystkich surowych rekordów.
+async function entsogRange(operator, from, to, onRows) {
   for (let a = from; a <= to; a = addDays(a, 366)) {
     const b = addDays(a, 365) < to ? addDays(a, 365) : to;
-    out.push(...(await entsog(operator, a, b)));
+    onRows(await entsog(operator, a, b));
   }
-  return out;
 }
 
 async function entsog(operator, from, to) {
@@ -180,12 +179,11 @@ let power; // Map(dzień → GWh energii elektrycznej z gazu)
 async function loadData(historyDays) {
   const to = todayIso();
   const from = addDays(to, -historyDays - 5);
-  const rows = (await Promise.all(OPERATORS.map((op) => entsogRange(op, from, to)))).flat();
   const flowRaw = new Map();
   const capRaw = new Map();
   const meta = new Map(); // punkt|kierunek → {label, type}
   let last = '';
-  for (const r of rows) {
+  const onRows = (rows) => { for (const r of rows) {
     if (r.pointKey.startsWith('VTP') || r.pointKey === 'ITP-00293') continue; // punkty wirtualne i połączenie wewnętrzne z gazociągiem jamalskim
     const k = `${r.pointKey}|${r.directionKey}`;
     const v = num(r.value);
@@ -201,7 +199,8 @@ async function loadData(historyDays) {
       if (!capRaw.has(k)) capRaw.set(k, []);
       capRaw.get(k).push({ from: r.periodFrom.slice(0, 10), to: r.periodTo.slice(0, 10), v });
     }
-  }
+  } };
+  await Promise.all(OPERATORS.map((op) => entsogRange(op, from, to, onRows)));
   // Trwająca doba gazowa (od 6:00) ma tylko część danych — pomijamy ją, podobnie jak końcowe doby,
   // w których raportowało wyraźnie mniej punktów niż zwykle.
   const nowKey = warsaw(Date.now());
@@ -254,7 +253,7 @@ async function loadPower(from) {
 // ---------- Stan widoku ----------
 const RANGES = { 30: '30 dni', 90: '90 dni', 365: '12 miesięcy', 730: '2 lata', 1820: '5 lat' };
 let range = 90;
-try { range = +localStorage.getItem('gasRange') || 90; } catch { /* brak localStorage */ }
+try { range = Math.min(365, +localStorage.getItem('gasRange') || 90); } catch { /* brak localStorage */ }
 if (!RANGES[range]) range = 90;
 
 // Wycinek danych dla wybranego zakresu. Powyżej ~400 dni agregujemy do tygodni (średnia GWh/d w tygodniu):
@@ -359,7 +358,7 @@ async function renderUsesMonthly() {
     const mLabel = (t) => `${MONTHS[+t.slice(5, 7) - 1]} ${t.slice(0, 4)}`;
     const last = n - 1;
     const seg = rangeSeg('g-uses-m', n, 'g-uses-m');
-    box.innerHTML = staleNote({ what: 'miesięczne Eurostatu o gazie', asOf: months[last], maxDays: 75 }) + tilesHtml([
+    box.innerHTML = staleNote({ what: 'miesięczne Eurostatu o gazie', asOf: months[last], maxDays: 90 }) + tilesHtml([
       { l: `Zużycie krajowe — ${mLabel(months[last])}`, v: twhF(ic[last]), d: `${fmt0.format((ic[last] * 1000) / days(months[last]))} GWh na dobę` },
       { l: 'W tym energetyka zawodowa', v: twhF(pw[last]), d: `${fmt0.format((pw[last] / ic[last]) * 100)}% zużycia w miesiącu` },
       { l: 'Energetyka zawodowa, ostatnie 12 mies.', v: twhF(sum(pw.slice(-12))), d: `${fmt0.format((sum(pw.slice(-12)) / sum(ic.slice(-12))) * 100)}% z ${twhF(sum(ic.slice(-12)))}` },
@@ -430,7 +429,7 @@ async function renderUsesYear() {
           <div class="uval"><b>${twhF(x)}</b> <span class="muted">${fmt0.format((x / gic) * 100)}% zużycia</span></div></div>`;
       };
       const t3 = years.slice(Math.max(0, years.indexOf(Y) - 2), years.indexOf(Y) + 1);
-      box.innerHTML = staleNote({ what: 'roczne Eurostatu o gazie', asOf: years[n - 1], maxDays: 640 }) + yearSelect('g-year', years, Y) + `<span class="muted"> · ${esc(GEO_NAME)}</span>` +
+      box.innerHTML = staleNote({ what: 'roczne Eurostatu o gazie', asOf: years[n - 1], maxDays: 820 }) + yearSelect('g-year', years, Y) + `<span class="muted"> · ${esc(GEO_NAME)}</span>` +
         tilesHtml([
           { l: `Zużycie krajowe brutto ${Y}`, v: twhF(gic), d: 'w wartości opałowej' },
           { l: 'Gaz spalony w elektrowniach, elektrociepłowniach i ciepłowniach', v: twhF(v('TI_EHG_E')), d: `${fmt0.format((v('TI_EHG_E') / gic) * 100)}% zużycia` },
@@ -493,7 +492,8 @@ async function renderDepMonthly() {
       e.n++;
       byM.set(m, e);
     });
-    const months = [...byM.keys()].sort();
+    // Stałe okno: ostatnie 12 pełnych miesięcy i bieżący (niezależnie od tego, ile historii wczytała zakładka dzienna).
+    const months = [...byM.keys()].sort().slice(-13);
     const full = (m) => byM.get(m).n === new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)).getUTCDate();
     const share = months.map((m) => { const e = byM.get(m); const net = e.imp - e.exp; return (net / (net + e.prod)) * 100; });
     const mLabel = (m) => `${MONTHS[+m.slice(5, 7) - 1]} ${m.slice(0, 4)}${full(m) ? '' : ' (niepełny)'}`;
@@ -509,7 +509,7 @@ async function renderDepMonthly() {
       '<p class="note">Z pomiarów GAZ-SYSTEM w ENTSOG (ostatnie ok. 12 miesięcy): import netto ÷ (import netto + wydobycie krajowe), bez zmian zapasu w magazynach, w cieple spalania. Eurostat nie publikuje miesięcznego wydobycia gazu w Polsce od września 2023, dlatego nie da się policzyć oficjalnego wskaźnika miesięcznie — oficjalny, roczny jest w zakładce „Roczne”.</p>';
     drawChart('g-dep-m', $('#g-dep-m-chart'), {
       n: months.length, bars: true, series: [{ name: 'Import netto w dostawach', color: 'var(--g-gaz)', values: share }], barColor: () => 'var(--g-gaz)',
-      xTicks: months.map((m, i) => ({ i, label: MONTHS[+m.slice(5, 7) - 1], at: 'center' })), height: 200, minSpan: 3, yFmt: (v) => `${fmt0.format(v)}%`,
+      xTicks: months.map((m, i) => ({ i, label: MONTHS[+m.slice(5, 7) - 1] + (m.slice(5, 7) === '01' || i === 0 ? ` ${m.slice(0, 4)}` : ''), at: 'center' })), height: 200, minSpan: 3, yFmt: (v) => `${fmt0.format(v)}%`,
       label: 'Udział importu netto w dostawach gazu, miesięcznie',
       tooltip: (i) => { const x = byM.get(months[i]); return tipRows(mLabel(months[i]), [{ name: 'Udział importu netto', color: 'var(--g-gaz)', value: pcF(share[i]) }, { name: 'Import', value: `${fmt2.format(x.imp / 1000)} TWh` }, { name: 'Eksport', value: `${fmt2.format(x.exp / 1000)} TWh` }, { name: 'Wydobycie krajowe', value: `${fmt2.format(x.prod / 1000)} TWh` }]); },
     }, 'dep-m');
@@ -823,6 +823,7 @@ async function renderPower(s) {
     if (!power) {
       box.innerHTML = empty('Ładowanie…');
       power = loadPower(data.days[0]);
+      power.catch(() => { power = null; }); // po błędzie PSE kolejna próba przy następnym renderowaniu
     }
     const pw = await power;
     // Średnia dobowa w przedziale (doba albo tydzień).
@@ -861,7 +862,8 @@ $('#range').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-r]');
   if (!b || !data) return;
   range = +b.dataset.r;
-  try { localStorage.setItem('gasRange', range); } catch { /* j.w. */ }
+  // Zakresy dłuższe niż rok nie są zapamiętywane — inaczej każda wizyta zaczynałaby się od pobierania 5 lat danych.
+  try { localStorage.setItem('gasRange', range <= 365 ? range : 365); } catch { /* j.w. */ }
   if (range > data.historyDays) {
     // Dłuższa historia: dociągamy ENTSOG (porcjami po roku) i od nowa dane PSE.
     document.querySelectorAll('#range .seg button').forEach((x) => x.classList.toggle('on', x === b));
