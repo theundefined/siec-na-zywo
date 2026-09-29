@@ -1,6 +1,6 @@
 import { renderMix, renderBills, renderRenYear, renderElecYear } from './stats.js';
 import { tipRows, placeTip, hideTip, fmt0, fmt2 } from './charts.js';
-import { pse, FILES, TZ, HOUR, fKey, warsaw, todayIso, addDays, MONTHS, $, plural, esc, mw, errorBox, empty, table, tilesHtml, redraws, views, drawChart, initTheme, initInstall, initTabs, clearGroups } from './common.js';
+import { pse, FILES, TZ, HOUR, fKey, warsaw, todayIso, addDays, MONTHS, $, plural, esc, mw, errorBox, empty, table, tilesHtml, redraws, views, drawChart, initTheme, initInstall, initTabs, clearGroups, staleNote } from './common.js';
 
 // ---------- Źródła danych (te same co w aplikacji Energetyczny Kompas) ----------
 
@@ -105,21 +105,23 @@ const GEN_GROUPS = [
 // Źródło: ARE S.A. (statystyka publiczna), „Moc elektryczna osiągalna (stan na koniec miesiąca) wg rodzajów paliw
 // i technologii wytwarzania”. ARE nie rozdziela wiatru: wartość ARE obejmuje farmy lądowe, bo jedyna farma morska
 // (Baltic Power) jest w rozruchu i nie weszła jeszcze do mocy osiągalnej — dla niej przyjmujemy moc nominalną.
+// Moc osiągalna: aktualne dane z data/capacity.json (ARE, pobierane przez GitHub Actions); poniższe wartości to zapas,
+// gdy pliku brak. Wiatr morski nie jest jeszcze wykazywany przez ARE — stała 1140 MW (Baltic Power) do czasu, aż się pojawi.
 const CAPACITY = {
-  asOf: 'koniec lipca 2026',
+  asOf: '2026-07',
   sources: [
     { name: 'ARE — moc osiągalna wg paliw', url: 'https://www.are.waw.pl/badania-statystyczne/prezentacja-wybranych-danych' },
     { name: 'Baltic Power — 76 turbin × 15 MW', url: 'https://balticpower.pl/o-projekcie/' },
   ],
   groups: [
-    { name: 'Węgiel kamienny', codes: ['WK'], mw: 20976.839, color: 'var(--g-wk)' },
-    { name: 'Węgiel brunatny', codes: ['WB'], mw: 7605, color: 'var(--g-wb)' },
-    { name: 'Gaz ziemny', codes: ['GZ'], mw: 6035.578, color: 'var(--g-gaz)' },
-    { name: 'Biomasa i biogaz', codes: ['BM', 'BG'], mw: 912.81 + 324.771, color: 'var(--g-bio)' },
-    { name: 'Woda (bez szczytowo-pompowych)', codes: ['WP', 'WZ'], mw: 1002.226, color: 'var(--g-woda)' },
-    { name: 'Wiatr lądowy', codes: ['WI'], mw: 10822.661, color: 'var(--g-wl)' },
+    { name: 'Węgiel kamienny', codes: ['WK'], are: ['WK'], mw: 20976.839, color: 'var(--g-wk)' },
+    { name: 'Węgiel brunatny', codes: ['WB'], are: ['WB'], mw: 7605, color: 'var(--g-wb)' },
+    { name: 'Gaz ziemny', codes: ['GZ'], are: ['GZ'], mw: 6035.578, color: 'var(--g-gaz)' },
+    { name: 'Biomasa i biogaz', codes: ['BM', 'BG'], are: ['BM', 'BG'], mw: 912.81 + 324.771, color: 'var(--g-bio)' },
+    { name: 'Woda (bez szczytowo-pompowych)', codes: ['WP', 'WZ'], are: ['WODA'], mw: 1002.226, color: 'var(--g-woda)' },
+    { name: 'Wiatr lądowy', codes: ['WI'], are: ['WIATR'], mw: 10822.661, color: 'var(--g-wl)' },
     { name: 'Wiatr morski (w rozruchu)', codes: ['WM'], mw: 1140, color: 'var(--g-wm)' },
-    { name: 'Słońce (PV)', codes: ['ES'], mw: 27119.471, color: 'var(--g-pv)' },
+    { name: 'Słońce (PV)', codes: ['ES'], are: ['PV'], mw: 27119.471, color: 'var(--g-pv)' },
   ],
 };
 
@@ -351,7 +353,10 @@ async function renderLoad({ silent = false } = {}) {
       peak >= 0 ? { l: 'Prognozowany szczyt', v: mw(fc[peak]), d: period(grid, peak) } : null,
       { l: 'Prognozowane zużycie doby', v: `${fmt0.format(fc.reduce((s, v) => s + (v || 0), 0) / 4000)} GWh`, d: '' },
     ].filter(Boolean);
-    box.innerHTML = tilesHtml(tiles) + '<div class="chart" id="load-chart"></div>' +
+    // Dziś: ostatni pomiar PSE powinien być sprzed najwyżej ok. 2 godzin.
+    const lastEnd = lastA >= 0 ? grid.starts[lastA] + grid.step : midnight(date);
+    const fresh = date === todayIso() ? staleNote({ what: 'o zapotrzebowaniu (PSE)', at: lastEnd, maxMinutes: 120 }) : '';
+    box.innerHTML = fresh + tilesHtml(tiles) + '<div class="chart" id="load-chart"></div>' +
       table(['Okres', 'Prognoza [MW]', 'Rzeczywiste [MW]'], grid.starts.map((_, i) => [period(grid, i), fc[i] == null ? '—' : fmt0.format(fc[i]), ac[i] == null ? '—' : fmt0.format(ac[i])]));
     drawChart('load', $('#load-chart'), {
       n, series, xTicks: xTicks(grid), label: 'Zapotrzebowanie KSE: prognoza i wykonanie',
@@ -476,19 +481,31 @@ async function renderBalance({ silent = false } = {}) {
   }
 }
 
-// ---------- Wykorzystanie mocy osiągalnej (his-gen-pal-sire / CAPACITY) ----------
+// ---------- Wykorzystanie mocy osiągalnej (his-gen-pal-sire / capacity.json) ----------
+let capP;
+function loadCapacity() {
+  capP ??= fetch('data/capacity.json', { cache: 'no-cache' })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    .then((doc) => ({
+      ...CAPACITY, asOf: doc.dataAsOf, fetched: doc.fetched, stale: doc.stale, live: true,
+      groups: CAPACITY.groups.map((g) => (g.are ? { ...g, mw: g.are.reduce((a, c) => a + (doc.mw[c] ?? 0), 0) } : g)),
+    }))
+    .catch(() => ({ ...CAPACITY, live: false }));
+  return capP;
+}
+const monthName = (ym) => `${['styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec', 'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'][+ym.slice(5, 7) - 1]} ${ym.slice(0, 4)}`;
 async function renderUtil({ silent = false } = {}) {
   const box = $('#util-body');
   const run = begin(box, silent);
   try {
-    const rows = await pseDay('his-gen-pal-sire', 20000);
+    const [rows, CAP] = await Promise.all([pseDay('his-gen-pal-sire', 20000), loadCapacity()]);
     if (run.stale()) return;
     if (!rows.length) return void (box.innerHTML = empty('Brak danych o generacji dla wybranego dnia.'));
     const grid = dayGrid(date, Q);
     const n = grid.starts.length;
     const codeGroup = new Map();
-    CAPACITY.groups.forEach((g, k) => g.codes.forEach((c) => codeGroup.set(c, k)));
-    const mwv = CAPACITY.groups.map(() => new Array(n).fill(null));
+    CAP.groups.forEach((g, k) => g.codes.forEach((c) => codeGroup.set(c, k)));
+    const mwv = CAP.groups.map(() => new Array(n).fill(null));
     for (const r of rows) {
       const i = grid.index.get(utc(r.dtime_utc) - Q);
       const k = codeGroup.get(r.alias_sire);
@@ -496,7 +513,7 @@ async function renderUtil({ silent = false } = {}) {
       const v = parseFloat(String(r.value).replace(',', '.'));
       if (isFinite(v)) mwv[k][i] = (mwv[k][i] || 0) + Math.max(0, v);
     }
-    const series = CAPACITY.groups.map((g, k) => ({ name: g.name, color: g.color, values: mwv[k].map((v) => (v == null ? null : (v / g.mw) * 100)) }));
+    const series = CAP.groups.map((g, k) => ({ name: g.name, color: g.color, values: mwv[k].map((v) => (v == null ? null : (v / g.mw) * 100)) }));
     const idx = series[0].values.map((_, i) => i).filter((i) => series.some((s) => s.values[i] != null));
     const last = idx[idx.length - 1];
     const pct = (v) => (v == null ? '—' : `${fmt0.format(v)}%`);
@@ -505,7 +522,7 @@ async function renderUtil({ silent = false } = {}) {
       const mx = vals.reduce((a, v, j) => (v > vals[a] ? j : a), 0);
       return { avg: vals.reduce((a, v) => a + v, 0) / vals.length, max: vals[mx], maxI: idx[mx], last: s.values[last] };
     });
-    const rowsHtml = CAPACITY.groups
+    const rowsHtml = CAP.groups
       .map((g, k) => {
         const st = stats[k];
         return `<div class="urow"><div class="uname"><i class="sw" style="background:${g.color}"></i>${g.name}<span class="muted"> · ${fmt0.format(g.mw)} MW</span></div>
@@ -513,11 +530,11 @@ async function renderUtil({ silent = false } = {}) {
           <div class="uval">śr. <b>${pct(st.avg)}</b> <span class="muted">maks. ${pct(st.max)} · ostatnio ${pct(st.last)}</span></div></div>`;
       })
       .join('');
-    box.innerHTML = `<div class="legend"><span class="key"><i class="sw" style="background:var(--ink-2)"></i>średnie wykorzystanie w dobie</span><span class="key"><i class="plan-key"></i>maksimum w dobie</span></div>
+    box.innerHTML = staleNote({ what: 'o mocy osiągalnej (ARE)', asOf: CAP.asOf, maxDays: 75, fetched: CAP.fetched, stale: CAP.stale }) + `<div class="legend"><span class="key"><i class="sw" style="background:var(--ink-2)"></i>średnie wykorzystanie w dobie</span><span class="key"><i class="plan-key"></i>maksimum w dobie</span></div>
       <div class="util">${rowsHtml}</div>` +
       '<h3 class="sub-h">Wykorzystanie w ciągu doby</h3>' + '<div class="chart" id="util-chart"></div>' +
-      table(['Okres', ...CAPACITY.groups.map((g) => g.name + ' [%]')], grid.starts.map((_, i) => [period(grid, i), ...series.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i])))])) +
-      `<p class="note">Wykorzystanie = bieżąca generacja (PSE) ÷ moc osiągalna danego rodzaju źródeł, stan: ${CAPACITY.asOf}. Źródła mocy: ${CAPACITY.sources.map((x) => `<a href="${x.url}" rel="noopener">${x.name}</a>`).join(', ')}. Moc to wartość stała — nie uwzględnia bieżących remontów i ubytków. Wiatr morski: farma Baltic Power jest w rozruchu (część turbin jeszcze nie pracuje), więc procent jest liczony od pełnej mocy nominalnej 1140 MW. Pominięto elektrownie szczytowo-pompowe (ARE nie podaje ich mocy osobno) oraz gaz koksowniczy, olej i odpady.</p>`;
+      table(['Okres', ...CAP.groups.map((g) => g.name + ' [%]')], grid.starts.map((_, i) => [period(grid, i), ...series.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i])))])) +
+      `<p class="note">Wykorzystanie = bieżąca generacja (PSE) ÷ moc osiągalna danego rodzaju źródeł, stan na koniec: ${monthName(CAP.asOf)}${CAP.live ? ' (pobierane automatycznie z ARE)' : ' (wartości zapasowe — nie udało się wczytać aktualnych danych ARE)'}. Źródła mocy: ${CAP.sources.map((x) => `<a href="${x.url}" rel="noopener">${x.name}</a>`).join(', ')}. Moc to wartość stała — nie uwzględnia bieżących remontów i ubytków. Wiatr morski: ARE jeszcze go nie wykazuje, dlatego przyjmujemy ręcznie wpisaną moc nominalną Baltic Power (1140 MW; farma jest w rozruchu). ARE nie rozdziela wiatru na lądowy i morski — gdy zacznie wykazywać morski, trzeba to rozdzielić. Instalacje hybrydowe OZE (ok. 28 MW) pominięto. Pominięto elektrownie szczytowo-pompowe (ARE nie podaje ich mocy osobno) oraz gaz koksowniczy, olej i odpady.</p>`;
     drawChart('util', $('#util-chart'), {
       n, series, xTicks: xTicks(grid), height: 280, label: 'Wykorzystanie mocy osiągalnej według rodzaju źródła',
       yFmt: (v) => `${fmt0.format(v)}%`,
@@ -775,7 +792,7 @@ async function drawNow() {
       .join('');
     const status = (v) => (v === 1 ? '<span class="ok">● aktywny</span>' : `<span class="off">○ nieaktywny (${esc(v)})</span>`);
 
-    box.innerHTML = `${tilesHtml(tiles)}
+    box.innerHTML = staleNote({ what: 'bieżące (plik aplikacji)', at: ts.getTime(), maxMinutes: 20 }) + `${tilesHtml(tiles)}
       <div class="grid2">
         <div><h3>Wymiana międzynarodowa <span class="muted">(przepływy fizyczne)</span></h3>
           ${refCtl}

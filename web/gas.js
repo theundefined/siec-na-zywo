@@ -1,5 +1,5 @@
 import { tipRows, fmt0, fmt2 } from './charts.js';
-import { pse, eurostat, EU_NAMES, plural, warsaw, todayIso, addDays, MONTHS, $, esc, errorBox, empty, table, tilesHtml, drawChart, initTheme, initInstall, initTabs, clearGroups, rangeSeg, yearSelect } from './common.js';
+import { pse, eurostat, EU_NAMES, plural, warsaw, todayIso, addDays, MONTHS, $, esc, errorBox, empty, table, tilesHtml, drawChart, initTheme, initInstall, initTabs, clearGroups, rangeSeg, yearSelect, staleNote } from './common.js';
 
 // ---------- Źródło: ENTSOG Transparency Platform (dane GAZ-SYSTEM), bez klucza, CORS * ----------
 // Przepływy fizyczne (Physical Flow) i moc techniczna ciągła (Firm Technical) w punktach systemu przesyłowego,
@@ -299,7 +299,7 @@ async function renderUsesMonthly() {
     const mLabel = (t) => `${MONTHS[+t.slice(5, 7) - 1]} ${t.slice(0, 4)}`;
     const last = n - 1;
     const seg = rangeSeg('g-uses-m', n, 'g-uses-m');
-    box.innerHTML = tilesHtml([
+    box.innerHTML = staleNote({ what: 'miesięczne Eurostatu o gazie', asOf: months[last], maxDays: 75 }) + tilesHtml([
       { l: `Zużycie krajowe — ${mLabel(months[last])}`, v: twhF(ic[last]), d: `${fmt0.format((ic[last] * 1000) / days(months[last]))} GWh na dobę` },
       { l: 'W tym energetyka zawodowa', v: twhF(pw[last]), d: `${fmt0.format((pw[last] / ic[last]) * 100)}% zużycia w miesiącu` },
       { l: 'Energetyka zawodowa, ostatnie 12 mies.', v: twhF(sum(pw.slice(-12))), d: `${fmt0.format((sum(pw.slice(-12)) / sum(ic.slice(-12))) * 100)}% z ${twhF(sum(ic.slice(-12)))}` },
@@ -368,7 +368,7 @@ async function renderUsesYear() {
           <div class="uval"><b>${twhF(x)}</b> <span class="muted">${fmt0.format((x / gic) * 100)}% zużycia</span></div></div>`;
       };
       const t3 = years.slice(Math.max(0, years.indexOf(Y) - 2), years.indexOf(Y) + 1);
-      box.innerHTML = yearSelect('g-year', years, Y) +
+      box.innerHTML = staleNote({ what: 'roczne Eurostatu o gazie', asOf: years[n - 1], maxDays: 640 }) + yearSelect('g-year', years, Y) +
         tilesHtml([
           { l: `Zużycie krajowe brutto ${Y}`, v: twhF(gic), d: 'w wartości opałowej' },
           { l: 'Gaz spalony w elektrowniach, elektrociepłowniach i ciepłowniach', v: twhF(v('TI_EHG_E')), d: `${fmt0.format((v('TI_EHG_E') / gic) * 100)}% zużycia` },
@@ -531,7 +531,7 @@ function renderDay(s, g) {
   const warn = data.unknown.length
     ? `<p class="warn-box">⚠ W danych ENTSOG są punkty spoza listy obsługiwanych przez stronę — ujęto je jako „Nieprzypisane”: ${data.unknown.map((u) => `${esc(u.label)} (${esc(u.key)}, ${u.dir === 'entry' ? 'wejście' : 'wyjście'}${u.type ? `, ${esc(u.type)}` : ''}, śr. ${gwh(u.avg)}/d)`).join('; ')}.</p>`
     : '';
-  box.innerHTML = warn + tilesHtml([
+  box.innerHTML = staleNote({ what: 'o przepływach gazu (ENTSOG)', asOf: data.days[data.days.length - 1], maxDays: 3 }) + warn + tilesHtml([
     { l: 'Dostawy do systemu', v: gwh(supply), d: 'wydobycie + import + odbiór z magazynów' },
     { l: 'Zużycie krajowe', v: gwh(domestic), d: `dystrybucja ${gwh(g.dist[i])} · odbiorcy przesyłowi ${gwh(g.fc[i])}` },
     { l: 'Magazyny', v: net >= 0 ? `+${gwh(net)}` : `−${gwh(-net)}`, d: net >= 0 ? 'zatłoczono więcej, niż odebrano' : 'odebrano więcej, niż zatłoczono' },
@@ -575,7 +575,7 @@ async function renderPrice(s) {
     const ch = back ? ((price[last] - back.price) / back.price) * 100 : null;
     const zl = (v) => (v == null ? '—' : `${fmt2.format(v)} zł/MWh`);
     const avgP = sum(idx.map((i) => price[i] * byDay.get(days[i]).volume)) / sum(idx.map((i) => byDay.get(days[i]).volume));
-    box.innerHTML = tilesHtml([
+    box.innerHTML = staleNote({ what: 'o cenach gazu (TGE/Instrat)', asOf: doc.dataAsOf || doc.data[doc.data.length - 1].day, maxDays: 3, fetched: doc.fetched, stale: doc.stale }) + tilesHtml([
       { l: `TGEgasDA — dostawa ${fDay.format(dt(days[last]))}`, v: zl(price[last]), d: `${fmt2.format(price[last] / 1000)} zł/kWh · wolumen ${gwh(vol[last])}` },
       ch == null ? null : { l: 'Zmiana w 30 dni', v: `${ch >= 0 ? '+' : '−'}${fmt0.format(Math.abs(ch))}%`, d: `od ${zl(back.price)}` },
       { l: 'Średnia ważona wolumenem', v: zl(avgP), d: 'w wybranym okresie' },

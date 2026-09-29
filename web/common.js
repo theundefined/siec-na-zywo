@@ -256,3 +256,30 @@ export function rangeSeg(group, n, key) {
 export function yearSelect(id, years, sel) {
   return `<label class="year-sel">Rok: <select id="${id}">${years.slice().reverse().map((y) => `<option value="${y}"${y === sel ? ' selected' : ''}>${y}</option>`).join('')}</select></label>`;
 }
+
+// ---------- Świeżość danych ----------
+// Ostrzeżenie, gdy dane są starsze niż zwykle dla danego źródła (np. padł workflow albo źródło przestało publikować).
+// asOf: 'RRRR-MM-DD', 'RRRR-MM' (koniec miesiąca) albo 'RRRR' (koniec roku); maxDays — normalne opóźnienie źródła.
+export function asOfDate(asOf) {
+  const [y, m, d] = String(asOf).split('-').map(Number);
+  if (d) return Date.UTC(y, m - 1, d);
+  if (m) return Date.UTC(y, m, 0);
+  return Date.UTC(y, 11, 31);
+}
+export function staleNote({ what, asOf, maxDays, fetched, fetchedMaxHours = 30, stale, at, maxMinutes }) {
+  const msgs = [];
+  if (at != null && maxMinutes != null) {
+    const min = Math.floor((Date.now() - at) / 6e4);
+    if (min > maxMinutes) msgs.push(`dane ${what} są sprzed ${min >= 120 ? `${Math.floor(min / 60)} godz.` : `${min} min`} — zwykle odświeżają się częściej; źródło mogło przestać publikować`);
+  }
+  if (asOf != null) {
+    const age = Math.floor((Date.now() - asOfDate(asOf)) / 864e5);
+    if (age > maxDays) msgs.push(`najnowsze dane ${what} są z ${asOf} (${age} dni temu) — zwykle nie starsze niż ${maxDays} dni; źródło mogło przestać publikować`);
+  }
+  if (fetched) {
+    const h = (Date.now() - Date.parse(fetched)) / 36e5;
+    if (h > fetchedMaxHours) msgs.push(`plik z danymi ${what} nie był odświeżany od ${Math.floor(h / 24)} dni (automatyczne pobieranie mogło przestać działać)`);
+  }
+  if (stale) msgs.push(`ostatnia próba odświeżenia danych ${what} nie powiodła się — pokazujemy poprzednią kopię`);
+  return msgs.length ? `<p class="warn-box">⚠ ${esc(msgs.join('; '))}.</p>` : '';
+}

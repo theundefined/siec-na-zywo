@@ -42,8 +42,8 @@ Pułapki:
 | `alert.json` | Komunikat w aplikacji (`show`, `title`, `body`). |
 
 ### Moc osiągalna (wykres „Wykorzystanie mocy źródeł”)
-API PSE nie udostępnia mocy według rodzajów źródeł, więc wartości są wpisane w stałą `CAPACITY` w `app.js`
-i trzeba je aktualizować ręcznie, raz w miesiącu:
+API PSE nie udostępnia mocy według rodzajów źródeł. `scripts/fetch_data.py` pobiera ją automatycznie ze strony ARE do
+`data/capacity.json` (kategorie mapowane po nazwie, kontrola sumy); stała `CAPACITY` w `app.js` jest tylko zapasem:
 - **ARE S.A.** (statystyka publiczna), https://www.are.waw.pl/badania-statystyczne/prezentacja-wybranych-danych,
   wykres „Moc elektryczna osiągalna (stan na koniec miesiąca) wg rodzajów paliw i technologii wytwarzania”.
   Dane są osadzone w HTML strony (Next.js, `self.__next_f`). ARE nie rozdziela wiatru na lądowy i morski.
@@ -161,3 +161,17 @@ Ceny gazu dla gospodarstw domowych (`nrg_pc_202`) dla Polski kończą się na 20
   `C0000X0350-0370 − C0220`, „Inne” = reszta do `TOTAL`) i zużycie (`nrg_bal_c`, `E7000`: FC + `NRG_E` + `DL` + `TI_E`
   = produkcja + import − eksport).
 - `nrg_ind_ren`: wskaźniki `REN_HEAT_CL` i `REN_TRA` bywają publikowane rok później niż `REN`/`REN_ELC`.
+
+### Potok danych (`scripts/fetch_data.py`, GitHub Actions) i świeżość
+- Źródła są niezależne: gdy któreś zawiedzie, skrypt zapisuje ostatnią opublikowaną kopię z GitHub Pages (z polem `stale`),
+  więc wdrożenie nie pada. Każdy plik ma `fetched` i `dataAsOf`.
+- `staleNote()` w `common.js` pokazuje ostrzeżenie, gdy dane są starsze niż zwykle dla źródła (ENTSOG 3 dni, TGE 3 dni,
+  ARE 75 dni, Eurostat miesięczny gaz 75 / prąd 150 dni, roczny 640 dni, `przesyly.json` 20 min, pomiary PSE dziś 2 godz.)
+  albo gdy plik z workflow nie był odświeżany od > 30 godz.
+- **GitHub wyłącza zaplanowane workflow w publicznych repozytoriach po ok. 60 dniach bez aktywności w repozytorium** —
+  wtedy ostrzeżenia o nieodświeżanych plikach są jedynym sygnałem; wystarczy dowolny commit albo ręczne uruchomienie workflow.
+
+### Dlaczego nie JAO
+Regulamin JAO (jao.eu/terms-conditions) zabrania pobierania danych botami („scraping, or the use of bots … is strictly
+prohibited”) i ich rozpowszechniania bez pisemnej zgody; dozwolony jest tylko użytek wewnętrzny. Dlatego MaxBex nie jest
+używany na publicznej stronie — wymagałby zgody JAO (contact@jao.eu).

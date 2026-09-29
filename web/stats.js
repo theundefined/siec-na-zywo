@@ -1,6 +1,6 @@
 // Sekcje strony „Prąd” oparte na statystyce Eurostatu (miesięcznej, półrocznej i rocznej) — niezależne od wybranego dnia.
 import { tipRows, fmt0, fmt2 } from './charts.js';
-import { $, eurostat, EU_NAMES, MONTHS, esc, errorBox, table, tilesHtml, drawChart, rangeSeg, yearSelect } from './common.js';
+import { $, eurostat, EU_NAMES, MONTHS, esc, errorBox, table, tilesHtml, drawChart, rangeSeg, yearSelect, staleNote } from './common.js';
 
 const twh = (v) => (v == null ? '—' : `${fmt2.format(v)} TWh`);
 const pc = (v) => (v == null ? '—' : `${fmt0.format(v)}%`);
@@ -46,7 +46,7 @@ export async function renderMix() {
     const yShare = (y) => { const ms = months.filter((t) => t.startsWith(y)); return ms.length === 12 ? (ms.reduce((a, t) => a + g('RA000', t), 0) / ms.reduce((a, t) => a + g('TOTAL', t), 0)) * 100 : null; };
     const max12 = renShare.slice(-12).reduce((a, v, i, arr) => (v > arr[a] ? i : a), 0) + n - 12;
     const seg = rangeSeg('mix', n, 'mix');
-    box.innerHTML = tilesHtml([
+    box.innerHTML = staleNote({ what: 'miesięczne Eurostatu o prądzie', asOf: months[last], maxDays: 150 }) + tilesHtml([
       { l: `Produkcja prądu — ${mLabel(months[last])}`, v: twh(total[last]), d: `OZE: ${pc(renShare[last])}, węgiel: ${pc((series[0].values[last] / total[last]) * 100)}` },
       { l: 'Udział OZE w produkcji prądu', v: `${pc(yShare(prevFull))} w ${prevFull}`, d: `${pc(yShare(String(+prevFull - 1)))} w ${+prevFull - 1}; rekordowy miesiąc w ostatnim roku: ${mLabel(months[max12])} (${pc(renShare[max12])})` },
       { l: `Import netto prądu — ${mLabel(months[last])}`, v: net[last] == null ? '—' : `${net[last] >= 0 ? '' : '−'}${twh(Math.abs(net[last]))}`, d: net[last] == null ? '' : net[last] >= 0 ? `import ${pc((net[last] / (aim[last] / 1000)) * 100)} zużycia` : 'Polska była eksporterem netto' },
@@ -160,7 +160,7 @@ export async function renderElecYear() {
           <div class="utrack"><span class="ubar" style="width:${mx > 0 ? (Math.max(0, v) / mx) * 100 : 0}%;background:${x.color}"></span></div>
           <div class="uval"><b>${twh(v)}</b> <span class="muted">${pc((v / total) * 100)}</span></div></div>`).join('')}</div>`;
       };
-      box.innerHTML = yearSelect('elec-y-year', years, Y) +
+      box.innerHTML = staleNote({ what: 'roczne Eurostatu o prądzie', asOf: years[n - 1], maxDays: 640 }) + yearSelect('elec-y-year', years, Y) +
         tilesHtml([
           { l: `Produkcja brutto ${Y}`, v: twh(tot), d: `OZE: ${pc((ren / tot) * 100)}, węgiel: ${pc(((vals[0] + vals[1]) / tot) * 100)}` },
           { l: 'Import − eksport', v: `${imp - exp >= 0 ? '+' : '−'}${twh(Math.abs(imp - exp))}`, d: `import ${twh(imp)}, eksport ${twh(exp)}` },
