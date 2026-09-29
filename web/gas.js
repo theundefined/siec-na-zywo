@@ -79,6 +79,11 @@ const RULES = [
   ['ITP-00556', 'exit', 'exp', 1],
   ['DIS-00204', 'exit', 'exp', 1],
 ];
+// Próg (GWh/d w którejkolwiek dobie), od którego nieznany punkt uznajemy za istotny.
+const UNKNOWN_MIN = 1;
+// Grupy dla punktów spoza listy — dodawane do SUPPLY/USE tylko, gdy takie punkty wystąpią.
+const UNK_IN = { id: 'unkIn', name: 'Nieprzypisane wejścia', color: 'var(--ink-2)' };
+const UNK_OUT = { id: 'unkOut', name: 'Nieprzypisane wyjścia', color: 'var(--ink-2)' };
 const STORAGES = [
   { key: 'UGS-00426', name: 'Wierzchowice' },
   { key: 'UGS-00425', name: 'GIM Sanok' },
@@ -155,11 +160,13 @@ async function loadData() {
   const rows = (await Promise.all(OPERATORS.map((op) => entsog(op, from, to)))).flat();
   const flowRaw = new Map();
   const capRaw = new Map();
+  const meta = new Map(); // punkt|kierunek → {label, type}
   let last = '';
   for (const r of rows) {
     if (r.pointKey.startsWith('VTP') || r.pointKey === 'ITP-00293') continue; // punkty wirtualne i połączenie wewnętrzne z gazociągiem jamalskim
     const k = `${r.pointKey}|${r.directionKey}`;
     const v = num(r.value);
+    if (!meta.has(k)) meta.set(k, { key: r.pointKey, dir: r.directionKey, label: r.pointLabel, type: r.pointType || '' });
     if (r.indicator === 'Physical Flow') {
       const day = r.periodFrom.slice(0, 10);
       if (!flowRaw.has(k)) flowRaw.set(k, new Map());
@@ -180,7 +187,7 @@ async function loadData() {
   const typical = Math.max(...[1, 2, 3, 4, 5, 6, 7].map((k) => count(addDays(current, -k))));
   last = last >= current ? addDays(current, -1) : last;
   while (last > from && count(last) < typical * 0.9) last = addDays(last, -1);
-  if (!last || !typical) return { days: [], flow: new Map(), cap: new Map() };
+  if (!last || !typical) return { days: [], flow: new Map(), cap: new Map(), unknown: [] };
   const days = [];
   for (let d = addDays(last, -HISTORY_DAYS + 5); d <= last; d = addDays(d, 1)) days.push(d);
   const flow = new Map([...flowRaw].map(([k, m]) => [k, days.map((d) => m.get(d) ?? null)]));
@@ -192,7 +199,11 @@ async function loadData() {
       return v;
     })];
   }));
-  return { days, flow, cap };
+  // Punkty spoza RULES/STORAGES z niezerowym przepływem (np. nowy terminal lub połączenie) — nie mogą po cichu wypaść z bilansu.
+  const known = new Set([...RULES.map(([k, d]) => `${k}|${d}`), ...STORAGES.flatMap((x) => [`${x.key}|entry`, `${x.key}|exit`])]);
+  const unknown = [...flow].filter(([k, vals]) => !known.has(k) && Math.max(0, ...vals.map((v) => v ?? 0)) >= UNKNOWN_MIN)
+    .map(([k, vals]) => ({ ...meta.get(k), avg: vals.reduce((a, v) => a + (v ?? 0), 0) / vals.length }));
+  return { days, flow, cap, unknown };
 }
 
 async function loadPower(from) {
@@ -223,7 +234,10 @@ function slice() {
 }
 
 function groups(s) {
-  const g = Object.fromEntries([...SUPPLY, ...USE, { id: 'sk' }, { id: 'ua' }].map((x) => [x.id, new Array(s.n).fill(null)]));
+  const g = Object.fromEntries([...SUPPLY, ...USE, { id: 'sk' }, { id: 'ua' }, UNK_IN, UNK_OUT].map((x) => [x.id, new Array(s.n).fill(null)]));
+  for (const u of data.unknown || []) {
+    s.f(u.key, u.dir).forEach((v, i) => { if (v != null) { const id = u.dir === 'entry' ? 'unkIn' : 'unkOut'; g[id][i] = (g[id][i] || 0) + v; } });
+  }
   for (const [key, dir, id, sign] of RULES) {
     s.f(key, dir).forEach((v, i) => { if (v != null) g[id][i] = (g[id][i] || 0) + sign * v; });
   }
@@ -514,7 +528,10 @@ function renderDay(s, g) {
   const domestic = (g.dist[i] ?? 0) + (g.fc[i] ?? 0);
   const net = (g.ugsIn[i] ?? 0) - (g.ugsOut[i] ?? 0);
   const rows = SUPPLY.flatMap((x) => (x.parts ? x.parts.map(([id, name]) => ({ name, color: x.color, v: g[id][i] ?? 0 })) : [{ ...x, v: g[x.id][i] ?? 0 }])).filter((x) => x.v >= 0.5).sort((a, b) => b.v - a.v);
-  box.innerHTML = tilesHtml([
+  const warn = data.unknown.length
+    ? `<p class="warn-box">⚠ W danych ENTSOG są punkty spoza listy obsługiwanych przez stronę — ujęto je jako „Nieprzypisane”: ${data.unknown.map((u) => `${esc(u.label)} (${esc(u.key)}, ${u.dir === 'entry' ? 'wejście' : 'wyjście'}${u.type ? `, ${esc(u.type)}` : ''}, śr. ${gwh(u.avg)}/d)`).join('; ')}.</p>`
+    : '';
+  box.innerHTML = warn + tilesHtml([
     { l: 'Dostawy do systemu', v: gwh(supply), d: 'wydobycie + import + odbiór z magazynów' },
     { l: 'Zużycie krajowe', v: gwh(domestic), d: `dystrybucja ${gwh(g.dist[i])} · odbiorcy przesyłowi ${gwh(g.fc[i])}` },
     { l: 'Magazyny', v: net >= 0 ? `+${gwh(net)}` : `−${gwh(-net)}`, d: net >= 0 ? 'zatłoczono więcej, niż odebrano' : 'odebrano więcej, niż zatłoczono' },
@@ -674,7 +691,7 @@ function renderStore(s) {
     '<div class="chart" id="g-store-chart"></div>' +
     '<h3 class="sub-h">Zmiana zapasu od początku okresu</h3><div class="chart" id="g-cum-chart"></div>' +
     table(['Doba gazowa', ...per.flatMap((p) => [`${p.name}: zatł. [GWh]`, 'odbiór [GWh]']), 'Netto [GWh]'], s.days.map((d, i) => [d, ...per.flatMap((p) => [p.in[i] == null ? '—' : fmt0.format(p.in[i]), p.out[i] == null ? '—' : fmt0.format(p.out[i])]), fmt0.format(net[i])]).reverse()) +
-    '<p class="note">Przepływy między systemem przesyłowym a magazynami (dane ENTSOG). Poziomu zapełnienia magazynów nie da się pobrać bez klucza API (GIE AGSI+), dlatego pokazujemy zmianę zapasu w wybranym okresie. Pojemność czynna polskich magazynów to ok. 3,3 mld m³ (ok. 36 TWh).</p>';
+    '<p class="note">Przepływy między systemem przesyłowym a magazynami (dane ENTSOG). Poziomu zapełnienia magazynów nie da się pobrać bez klucza API (GIE AGSI+), dlatego pokazujemy zmianę zapasu w wybranym okresie.</p>';
   drawChart('g-store', $('#g-store-chart'), {
     n: s.n, bars: true, barColor: (v) => (v >= 0 ? 'var(--s2)' : 'var(--s1)'), series: [{ name: 'Magazyny netto', color: 'var(--s2)', values: net }], xTicks: dayTicks(s.days), height: 220, minSpan: 7,
     legend: false, legendExtra: '<span class="key"><i class="sw" style="background:var(--s2)"></i>zatłaczanie (+)</span><span class="key"><i class="sw" style="background:var(--s1)"></i>odbiór (−)</span>',
@@ -764,7 +781,11 @@ $('#range').addEventListener('click', (e) => {
 });
 
 // Dane ENTSOG pobieramy zawsze (potrzebne też w zakładce miesięcznej); Eurostat — dopiero po otwarciu zakładki.
-const dataReady = loadData().then((d) => { data = d; });
+const dataReady = loadData().then((d) => {
+  data = d;
+  if (d.unknown.some((u) => u.dir === 'entry')) SUPPLY.push(UNK_IN);
+  if (d.unknown.some((u) => u.dir === 'exit')) USE.push(UNK_OUT);
+});
 initTabs({
   d: () => dataReady.then(renderAll, (e) => { for (const id of SECTIONS) $(`#${id}-body`).innerHTML = errorBox(e); }),
   m: () => { renderUsesMonthly(); renderDepMonthly(); },
