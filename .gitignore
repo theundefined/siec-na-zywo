@@ -1,0 +1,9 @@
+# Instalator aplikacji użyty do analizy — nie publikujemy (cudze oprogramowanie).
+*.xapk
+*.apk
+# Dane pobierane przez scripts/fetch_data.py (w repozytorium ich nie trzymamy; tworzy je workflow przy wdrożeniu).
+web/data/
+# Notatki i zrzuty z researchu
+scratch/
+*.bak
+__pycache__/

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sieć na żywo — gaz</title>
+  <meta name="description" content="Dostawy, zużycie, magazyny i wykorzystanie punktów systemu przesyłowego gazu w Polsce — dane GAZ-SYSTEM z ENTSOG.">
+  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#1f1f1d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Sieć na żywo">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap top-inner">
+      <div class="brand">
+        <img class="logo" src="icons/icon.svg" alt="" width="32" height="32">
+        <div>
+          <h1>Sieć na żywo</h1>
+          <p class="sub">Nieoficjalny podgląd danych PSE i GAZ-SYSTEM</p>
+        </div>
+        <nav class="tabs" aria-label="Rodzaj danych"><a href="./">Prąd</a><a href="gaz.html" aria-current="page">Gaz</a></nav>
+      </div>
+      <nav class="datenav" aria-label="Zakres">
+        <div id="range"></div>
+        <button id="install" type="button" class="ghost install" hidden>Zainstaluj aplikację</button>
+        <button id="theme" type="button" class="ghost">Motyw: auto</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <p id="range-label" class="date-label">Ładowanie…</p>
+    <nav class="toc" aria-label="Sekcje">
+      <a href="#g-day">Ostatnia doba</a><a href="#g-price">Ceny gazu</a><a href="#g-supply">Skąd gaz</a><a href="#g-use">Dokąd gaz</a><a href="#g-borders">Wymiana z sąsiadami</a><a href="#g-store">Magazyny</a><a href="#g-points">Wykorzystanie punktów</a><a href="#g-power">Gaz w elektroenergetyce</a>
+    </nav>
+    <p class="chart-hint">Wykresy: przeciągnij myszą, by powiększyć zakres · Ctrl + kółko przybliża/oddala · dwuklik przywraca pełny zakres · kliknięcie w legendzie ukrywa/pokazuje serię (dwuklik — tylko ta seria). Powiększenie jest wspólne dla wszystkich wykresów.</p>
+
+    <section class="card" id="g-day" aria-labelledby="g-day-h">
+      <div class="card-head">
+        <h2 id="g-day-h">Ostatnia doba gazowa</h2>
+        <p class="muted">Bilans systemu przesyłowego za ostatnią opublikowaną dobę (6:00–6:00)</p>
+      </div>
+      <div id="g-day-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-price" aria-labelledby="g-price-h">
+      <div class="card-head">
+        <h2 id="g-price-h">Ceny gazu na giełdzie (TGEgasDA)</h2>
+        <p class="muted">Rynek Dnia Następnego gazu TGE, zł/MWh</p>
+      </div>
+      <div id="g-price-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-supply" aria-labelledby="g-supply-h">
+      <div class="card-head">
+        <h2 id="g-supply-h">Skąd pochodzi gaz</h2>
+        <p class="muted">Dostawy do systemu przesyłowego według źródeł, GWh na dobę</p>
+      </div>
+      <div id="g-supply-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-use" aria-labelledby="g-use-h">
+      <div class="card-head">
+        <h2 id="g-use-h">Dokąd trafia gaz</h2>
+        <p class="muted">Odbiór z systemu przesyłowego, GWh na dobę</p>
+      </div>
+      <div id="g-use-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-borders" aria-labelledby="g-borders-h">
+      <div class="card-head">
+        <h2 id="g-borders-h">Wymiana z sąsiadami</h2>
+        <p class="muted">Import i eksport gazu na każdej granicy, GWh na dobę</p>
+      </div>
+      <div id="g-borders-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-store" aria-labelledby="g-store-h">
+      <div class="card-head">
+        <h2 id="g-store-h">Magazyny gazu</h2>
+        <p class="muted">Zatłaczanie i odbiór z podziemnych magazynów, GWh na dobę</p>
+      </div>
+      <div id="g-store-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-points" aria-labelledby="g-points-h">
+      <div class="card-head">
+        <h2 id="g-points-h">Wykorzystanie punktów systemu</h2>
+        <p class="muted">Przepływ jako procent mocy technicznej połączeń z sąsiadami, terminalu LNG i magazynów</p>
+      </div>
+      <div id="g-points-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-power" aria-labelledby="g-power-h">
+      <div class="card-head">
+        <h2 id="g-power-h">Gaz w produkcji energii elektrycznej</h2>
+        <p class="muted">Energia elektryczna z elektrowni i elektrociepłowni gazowych (PSE), GWh na dobę</p>
+      </div>
+      <div id="g-power-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+  </main>
+
+  <div id="install-help" class="install-help" role="dialog" aria-labelledby="install-help-h" hidden>
+    <h2 id="install-help-h">Dodaj do ekranu głównego</h2>
+    <div id="install-help-body"></div>
+    <button type="button" id="install-help-close">Zamknij</button>
+  </div>
+
+  <footer class="wrap foot">
+    <p>Źródła: <a href="https://transparency.entsog.eu" rel="noopener">ENTSOG Transparency Platform</a> (dane GAZ-SYSTEM: przepływy fizyczne i moc techniczna punktów)
+      oraz <a href="https://raporty.pse.pl" rel="noopener">API raportów PSE</a> (his-gen-pal-sire). Strona nieoficjalna, niezwiązana z GAZ-SYSTEM S.A. ani PSE S.A.</p>
+  </footer>
+
+  <script type="module" src="gas.js"></script>
+</body>
+</html>

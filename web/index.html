@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sieć na żywo — prąd</title>
+  <meta name="description" content="Godziny zalecanego użytkowania i oszczędzania prądu, bilans KSE, struktura generacji i ceny RCE — dane PSE.">
+  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#1f1f1d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Sieć na żywo">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap top-inner">
+      <div class="brand">
+        <img class="logo" src="icons/icon.svg" alt="" width="32" height="32">
+        <div>
+          <h1>Sieć na żywo</h1>
+          <p class="sub">Nieoficjalny podgląd danych PSE i GAZ-SYSTEM</p>
+        </div>
+        <nav class="tabs" aria-label="Rodzaj danych"><a href="./" aria-current="page">Prąd</a><a href="gaz.html">Gaz</a></nav>
+      </div>
+      <nav class="datenav" aria-label="Wybór dnia">
+        <button id="prev" type="button" aria-label="Poprzedni dzień">‹</button>
+        <input id="date" type="date" aria-label="Data">
+        <button id="next" type="button" aria-label="Następny dzień">›</button>
+        <button id="today" type="button" class="ghost">Dziś</button>
+        <button id="install" type="button" class="ghost install" hidden>Zainstaluj aplikację</button>
+        <button id="theme" type="button" class="ghost">Motyw: auto</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="alert" class="alert" role="status" hidden></div>
+    <p id="date-label" class="date-label"></p>
+    <nav class="toc" aria-label="Sekcje">
+      <a href="#kompas">Kompas</a><a href="#now">Bilans teraz</a><a href="#load">Zapotrzebowanie</a><a href="#bal">Produkcja vs zapotrz.</a><a href="#gen">Struktura generacji</a><a href="#util">Wykorzystanie mocy</a><a href="#rce">RCE</a><a href="#prices">Ceny RDN i RB</a><a href="#curt">Redukcje OZE</a><a href="#units">Elektrownie</a><a href="#plan">Prognoza 7 dni</a><a href="#lolp">LOLP</a><a href="#rcem">RCEm</a><a href="#co2">CO₂</a>
+    </nav>
+    <p class="chart-hint">Wykresy: przeciągnij myszą, by powiększyć zakres · Ctrl + kółko przybliża/oddala · dwuklik przywraca pełny zakres · kliknięcie w legendzie ukrywa/pokazuje serię (dwuklik — tylko ta seria). Powiększenie jest wspólne dla wykresów doby.</p>
+
+    <section class="card" id="kompas" aria-labelledby="kompas-h">
+      <div class="card-head">
+        <h2 id="kompas-h">Kompas — kiedy korzystać z prądu</h2>
+        <p class="muted">Prognoza PSE dla każdej godziny doby</p>
+      </div>
+      <div id="kompas-body"></div>
+    </section>
+
+    <section class="card" id="now" aria-labelledby="now-h">
+      <div class="card-head">
+        <h2 id="now-h">Bilans systemu teraz</h2>
+        <p class="muted"><span id="now-time">—</span> · odświeżane co minutę, niezależnie od wybranego dnia</p>
+      </div>
+      <div id="now-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="load" aria-labelledby="load-h">
+      <div class="card-head">
+        <h2 id="load-h">Zapotrzebowanie na moc (KSE)</h2>
+        <p class="muted">Prognoza a rzeczywiste zużycie, kwadranse, MW</p>
+      </div>
+      <div id="load-body"></div>
+    </section>
+
+    <section class="card" id="bal" aria-labelledby="bal-h">
+      <div class="card-head">
+        <h2 id="bal-h">Zapotrzebowanie a produkcja</h2>
+        <p class="muted">Rzeczywiste zapotrzebowanie KSE i łączna generacja krajowa, kwadranse, MW</p>
+      </div>
+      <div id="bal-body"></div>
+    </section>
+
+    <section class="card" id="gen" aria-labelledby="gen-h">
+      <div class="card-head">
+        <h2 id="gen-h">Dobowa struktura generacji</h2>
+        <p class="muted">Moc według źródeł, kwadranse, MW</p>
+      </div>
+      <div id="gen-body"></div>
+    </section>
+
+    <section class="card" id="util" aria-labelledby="util-h">
+      <div class="card-head">
+        <h2 id="util-h">Wykorzystanie mocy źródeł</h2>
+        <p class="muted">Jaki procent mocy osiągalnej danego rodzaju źródeł pracuje</p>
+      </div>
+      <div id="util-body"></div>
+    </section>
+
+    <section class="card" id="rce" aria-labelledby="rce-h">
+      <div class="card-head">
+        <h2 id="rce-h">Rynkowa cena energii (RCE)</h2>
+        <p class="muted">Cena w kwadransach, zł/MWh — podstawa rozliczeń prosumentów w net-billingu</p>
+      </div>
+      <div id="rce-body"></div>
+    </section>
+
+    <section class="card" id="prices" aria-labelledby="prices-h">
+      <div class="card-head">
+        <h2 id="prices-h">Ceny energii: RDN i rynek bilansujący</h2>
+        <p class="muted">Cena rynku dnia następnego (CSDAC) na tle cen rozliczeniowych rynku bilansującego, kwadranse, zł/MWh</p>
+      </div>
+      <div id="prices-body"></div>
+    </section>
+
+    <section class="card" id="curt" aria-labelledby="curt-h">
+      <div class="card-head">
+        <h2 id="curt-h">Redukcje generacji OZE</h2>
+        <p class="muted">Moc PV i farm wiatrowych ograniczona poleceniem PSE, kwadranse, MW</p>
+      </div>
+      <div id="curt-body"></div>
+    </section>
+
+    <section class="card" id="units" aria-labelledby="units-h">
+      <div class="card-head">
+        <h2 id="units-h">Praca dużych elektrowni</h2>
+        <p class="muted">Jednostki centralnie dysponowane (JWCD) — moc i energia według elektrowni</p>
+      </div>
+      <div id="units-body"></div>
+    </section>
+
+    <section class="card" id="plan" aria-labelledby="plan-h">
+      <div class="card-head">
+        <h2 id="plan-h">Prognoza PSE na 7 dni</h2>
+        <p class="muted">Zapotrzebowanie, wiatr, PV i zapas mocy — godzinowo od wybranego dnia</p>
+      </div>
+      <div id="plan-body"></div>
+    </section>
+
+    <section class="card" id="lolp" aria-labelledby="lolp-h">
+      <div class="card-head">
+        <h2 id="lolp-h">Ryzyko niedoboru mocy (LOLP)</h2>
+        <p class="muted">Prawdopodobieństwo niedoboru przy danej rezerwie mocy, kwadranse</p>
+      </div>
+      <div id="lolp-body"></div>
+    </section>
+
+    <section class="card" id="rcem" aria-labelledby="rcem-h">
+      <div class="card-head">
+        <h2 id="rcem-h">Miesięczna cena energii (RCEm)</h2>
+        <p class="muted">zł/MWh, porównanie lat</p>
+      </div>
+      <div id="rcem-body"><p class="state">Ładowanie…</p></div>
+    </section>
+    <section class="card" id="co2" aria-labelledby="co2-h">
+      <div class="card-head">
+        <h2 id="co2-h">Ceny uprawnień do emisji CO₂</h2>
+        <p class="muted">Ostatnie 12 miesięcy, €/t</p>
+      </div>
+      <div id="co2-body"></div>
+    </section>
+
+  </main>
+
+  <div id="install-help" class="install-help" role="dialog" aria-labelledby="install-help-h" hidden>
+    <h2 id="install-help-h">Dodaj do ekranu głównego</h2>
+    <div id="install-help-body"></div>
+    <button type="button" id="install-help-close">Zamknij</button>
+  </div>
+
+  <footer class="wrap foot">
+    <p>Źródła: <a href="https://raporty.pse.pl" rel="noopener">API raportów PSE</a> (pdgsz, kse-load, his-gen-pal-sire, rce-pln)
+      oraz pliki aplikacji <a href="https://www.energetycznykompas.pl" rel="noopener">Energetyczny Kompas</a> (przesyly.json, RCEm.json, alert.json).
+      Strona nieoficjalna, niezwiązana z PSE S.A.</p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
