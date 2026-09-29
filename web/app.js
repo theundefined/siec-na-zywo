@@ -978,6 +978,31 @@ async function renderCurt({ silent = false } = {}) {
 }
 
 // ---------- Praca dużych elektrowni (gen-jw: jednostki wytwórcze centralnie dysponowane) ----------
+// Paliwo elektrowni JWCD — PSE go nie publikuje, więc lista jest prowadzona ręcznie na podstawie informacji właścicieli
+// (stan: wrzesień 2026). Nowe nazwy z API trafiają do „paliwo nieznane”, żeby było widać, co trzeba uzupełnić.
+const FUELS = {
+  wk: { name: 'węgiel kamienny', color: 'var(--g-wk)' },
+  wb: { name: 'węgiel brunatny', color: 'var(--g-wb)' },
+  gaz: { name: 'gaz ziemny', color: 'var(--g-gaz)' },
+  bio: { name: 'biomasa', color: 'var(--g-bio)' },
+  pump: { name: 'woda (szczytowo-pompowa)', color: 'var(--g-woda)' },
+  wm: { name: 'wiatr morski', color: 'var(--g-wm)' },
+  pv: { name: 'fotowoltaika', color: 'var(--g-pv)' },
+  unk: { name: 'paliwo nieznane', color: 'var(--ink-2)' },
+};
+const PLANT_FUEL = {
+  'Bełchatów': 'wb', 'Turów': 'wb', 'Pątnów 2': 'wb',
+  'Opole': 'wk', 'Kozienice 1': 'wk', 'Kozienice 2': 'wk', 'Jaworzno 2 JWCD': 'wk', 'Jaworzno 3': 'wk', 'Połaniec': 'wk', 'Rybnik': 'wk',
+  'Ostrołęka B': 'wk', 'Łagisza': 'wk', 'Łaziska 3': 'wk', 'Siersza': 'wk', 'Skawina': 'wk', 'Katowice': 'wk', 'Chorzów': 'wk',
+  'EC Siekierki': 'wk', 'EC Łódź-4': 'wk', 'Kraków Łęg': 'wk', 'Karolin 2': 'wk', 'Wrocław': 'wk',
+  'Gryfino': 'gaz', 'EC Czechnica-2': 'gaz', 'EC Rzeszów': 'gaz', 'EC Stalowa Wola': 'gaz', 'EC Wrotków': 'gaz', 'EC Włocławek': 'gaz',
+  'EC Żerań 2': 'gaz', 'Płock': 'gaz', 'Zielona Góra': 'gaz', 'Ostrołęka C': 'gaz',
+  'Połaniec 2-Pasywna': 'bio',
+  'Żarnowiec': 'pump', 'Porąbka Żar': 'pump', 'Solina': 'pump', 'Żydowo': 'pump',
+  'MFW Baltic Power': 'wm', 'Zwartowo': 'pv',
+};
+const plantFuel = (name) => PLANT_FUEL[name] || (/Żarnowiec|Porąbka|Solina|Żydowo/.test(name) ? 'pump' : 'unk');
+
 async function renderUnits({ silent = false } = {}) {
   const box = $('#units-body');
   const run = begin(box, silent);
@@ -998,20 +1023,36 @@ async function renderUnits({ silent = false } = {}) {
       if (r.value >= 0) p.gen += r.value / 4;
       else p.pump += -r.value / 4;
     }
-    const list = [...plants.values()].map((p) => ({ ...p, max: Math.max(...p.net.filter((v) => v != null)), avg: p.net.filter((v) => v != null).reduce((a, v) => a + v, 0) / Math.max(1, p.net.filter((v) => v != null).length) })).sort((a, b) => b.gen - a.gen);
+    const list = [...plants.values()].map((p) => ({ ...p, fuel: plantFuel(p.name), max: Math.max(...p.net.filter((v) => v != null)), avg: p.net.filter((v) => v != null).reduce((a, v) => a + v, 0) / Math.max(1, p.net.filter((v) => v != null).length) })).sort((a, b) => b.gen - a.gen);
     const total = list.reduce((a, p) => a + p.gen, 0);
     const colors = ['var(--s1)', 'var(--s2)', 'var(--s3)', 'var(--s4)', 'var(--s5)', 'var(--s6)', 'var(--s7)', 'var(--s8)'];
-    const series = list.slice(0, 8).map((p, k) => ({ name: p.name, color: colors[k], values: p.net }));
+    const series = list.slice(0, 8).map((p, k) => ({ name: `${p.name} (${FUELS[p.fuel].name})`, color: colors[k], values: p.net }));
+    // Energia JWCD według paliwa (bez pompowania).
+    const byFuel = Object.keys(FUELS).map((f) => ({ f, e: list.filter((p) => p.fuel === f).reduce((a, p) => a + p.gen, 0) })).filter((x) => x.e > 0).sort((a, b) => b.e - a.e);
+    // Moc według paliwa w ciągu doby (warstwy w stałej kolejności, bez pompowania).
+    const fuelSeries = Object.keys(FUELS).map((f) => ({ name: FUELS[f].name, color: FUELS[f].color, values: grid.starts.map((_, i) => {
+      let t = null;
+      for (const p of list) if (p.fuel === f && p.net[i] != null) t = (t ?? 0) + Math.max(0, p.net[i]);
+      return t;
+    }) })).filter((s) => s.values.some((v) => v > 0));
     const eMax = list[0]?.gen || 1;
-    const rowHtml = (p) => `<div class="mrow"><div class="mname">${esc(p.name)} <span class="muted">· ${p.units.size} ${plural(p.units.size, ['blok', 'bloki', 'bloków'])}</span></div><div class="mtrack"><span class="mbar" style="width:${(p.gen / eMax) * 100}%"></span></div><div class="mval">${fmt2.format(p.gen / 1000)} GWh <span class="muted">śr. ${fmt0.format(p.avg)} · maks. ${fmt0.format(p.max)} MW${p.pump ? ` · pompowanie ${fmt0.format(p.pump)} MWh` : ''}</span></div></div>`;
+    const rowHtml = (p) => `<div class="mrow"><div class="mname"><i class="sw" style="background:${FUELS[p.fuel].color}"></i> ${esc(p.name)} <span class="muted">· ${FUELS[p.fuel].name} · ${p.units.size} ${plural(p.units.size, ['blok', 'bloki', 'bloków'])}</span></div><div class="mtrack"><span class="mbar" style="width:${(p.gen / eMax) * 100}%;background:${FUELS[p.fuel].color}"></span></div><div class="mval">${fmt2.format(p.gen / 1000)} GWh <span class="muted">śr. ${fmt0.format(p.avg)} · maks. ${fmt0.format(p.max)} MW${p.pump ? ` · pompowanie ${fmt0.format(p.pump)} MWh` : ''}</span></div></div>`;
     box.innerHTML = tilesHtml([
       { l: 'Energia z dużych elektrowni', v: `${fmt0.format(total / 1000)} GWh`, d: (() => { const u = list.reduce((a, p) => a + p.units.size, 0); return `${list.length} ${plural(list.length, ['elektrownia', 'elektrownie', 'elektrowni'])}, ${u} ${plural(u, ['jednostka', 'jednostki', 'jednostek'])}`; })() },
       { l: 'Największa', v: esc(list[0].name), d: `${fmt0.format((list[0].gen / total) * 100)}% tej energii` },
     ]) +
-      '<div class="chart" id="units-chart"></div>' +
+      `<h3 class="sub-h">Energia według paliwa</h3>
+      <div class="stackbar" role="img" aria-label="Energia z dużych elektrowni według paliwa">${byFuel.map((x) => `<span style="flex:${x.e};background:${FUELS[x.f].color}" title="${FUELS[x.f].name}: ${fmt2.format(x.e / 1000)} GWh"></span>`).join('')}</div>
+      <div class="legend">${byFuel.map((x) => `<span class="key"><i class="sw" style="background:${FUELS[x.f].color}"></i>${FUELS[x.f].name}: <b>${fmt2.format(x.e / 1000)} GWh</b> (${fmt0.format((x.e / total) * 100)}%)</span>`).join('')}</div>` +
+      '<div class="chart" id="units-fuel-chart"></div>' +
+      '<h3 class="sub-h">Największe elektrownie</h3><div class="chart" id="units-chart"></div>' +
       `<h3 class="sub-h">Ranking elektrowni — energia w dobie</h3><div class="mix">${list.slice(0, 12).map(rowHtml).join('')}</div>` +
       (list.length > 12 ? `<details class="table-view"><summary>Pozostałe elektrownie (${list.length - 12})</summary><div class="mix" style="margin-top:8px">${list.slice(12).map(rowHtml).join('')}</div></details>` : '') +
-      '<p class="note">Jednostki wytwórcze centralnie dysponowane (JWCD) — duże bloki sterowane przez PSE; bez małych źródeł, wiatru i PV. Na wykresie 8 elektrowni o największej produkcji; ujemne wartości to pompowanie w elektrowniach szczytowo-pompowych.</p>';
+      `<p class="note">Jednostki wytwórcze centralnie dysponowane (JWCD) — duże jednostki sterowane przez PSE; bez małych źródeł. Na wykresie 8 elektrowni o największej produkcji; ujemne wartości to pompowanie w elektrowniach szczytowo-pompowych. Paliwo: PSE go nie publikuje — przypisane ręcznie według informacji właścicieli elektrowni (stan: wrzesień 2026); podane jest paliwo podstawowe, bez współspalania biomasy w blokach węglowych.${list.some((p) => p.fuel === 'unk') ? ` Bez przypisanego paliwa: ${list.filter((p) => p.fuel === 'unk').map((p) => esc(p.name)).join(', ')}.` : ''}</p>`;
+    drawChart('units-fuel', $('#units-fuel-chart'), {
+      n, stacked: true, series: fuelSeries, xTicks: xTicks(grid), height: 240, label: 'Moc dużych elektrowni według paliwa', nowIndex: date === todayIso() ? nowIndex(grid) : null,
+      tooltip: (i, on) => tipRows(period(grid, i), [...fuelSeries.slice().reverse().filter((s) => on(s.name) && s.values[i] > 0).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Razem', value: mw(fuelSeries.reduce((a, s) => a + (s.values[i] ?? 0), 0)) }]),
+    });
     drawChart('units', $('#units-chart'), {
       n, series, xTicks: xTicks(grid), height: 280, label: 'Moc największych elektrowni', nowIndex: date === todayIso() ? nowIndex(grid) : null,
       tooltip: (i, on) => tipRows(period(grid, i), series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) }))),

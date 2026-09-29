@@ -192,3 +192,9 @@ używany na publicznej stronie — wymagałby zgody JAO (contact@jao.eu).
   Eurostacie zera zamiast braków — traktowane jak brak danych.
 - Ceny prądu: wybór rocznego zużycia domu (5 pasm `nrg_pc_204`; w `nrg_pc_204_c` pasmo DE ma kod `KWH_LE15000`)
   i porównania z UE w PPS albo euro.
+
+### Paliwo elektrowni JWCD
+API PSE (`gen-jw`, `pdwkseub`, `unav-pk5l`) nie podaje paliwa jednostek. `PLANT_FUEL` w `app.js` przypisuje je ręcznie według
+informacji właścicieli (stan: 09.2026; m.in. Gryfino = bloki gazowo-parowe 9 i 10 Dolnej Odry, Połaniec 2-Pasywna = „Zielony
+Blok” na biomasę, Zwartowo = farma PV ok. 204 MW, Rybnik = bloki węglowe do czasu uruchomienia bloku gazowego). Nowe nazwy
+elektrowni z API trafiają do „paliwo nieznane” i są wymienione w przypisie sekcji — wtedy trzeba uzupełnić listę.
