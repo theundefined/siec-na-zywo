@@ -1245,6 +1245,258 @@ async function renderCo2() {
   }
 }
 
+// ---------- Rezerwy mocy i ubytki w godzinach szczytu (his-bil-mocy) ----------
+// PSE publikuje wykonany bilans mocy dla dwóch szczytów doby: SR (poranny/przedpołudniowy) i SW (wieczorny).
+// jg = jednostki aktywnie uczestniczące w rynku bilansującym (JWCD, magazyny, OZE sterowane), prb = pozostałe.
+const PEAKS = { SR: 'szczyt poranny', SW: 'szczyt wieczorny' };
+const UB_CAUSES = [['rk', 'remonty kapitalne'], ['rs', 'remonty średnie'], ['rb', 'remonty bieżące'], ['ra', 'remonty awaryjne'], ['we', 'warunki eksploatacyjne (m.in. brak wiatru i słońca)'], ['ciep', 'ograniczenia ciepłownicze'], ['inw', 'inwestycje']];
+let resPeak = 'SW';
+let resHist;
+async function renderReserve({ silent = false } = {}) {
+  const box = $('#reserve-body');
+  const run = begin(box, silent);
+  try {
+    resHist ??= pse('his-bil-mocy', "business_date ge '2024-01-01'", 5000).catch((e) => { resHist = null; throw e; });
+    const all = (await resHist).slice().sort((a, b) => (a.business_date + a.peak < b.business_date + b.peak ? -1 : 1));
+    if (run.stale()) return;
+    const day = all.filter((r) => r.business_date === date);
+    const r = day.find((x) => x.peak === resPeak) || day[0];
+    const seg = `<div class="seg" role="group" aria-label="Szczyt">${Object.entries(PEAKS).map(([k, l]) => `<button type="button" data-p="${k}" class="${k === resPeak ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    let dayHtml;
+    if (!r) {
+      dayHtml = empty('PSE publikuje bilans mocy następnego dnia rano — dla wybranej doby jeszcze go nie ma.');
+    } else {
+      const causes = UB_CAUSES.map(([k, l]) => ({ l, v: (r[`${k}_jg`] ?? 0) + (r[`${k}_prb`] ?? 0) })).filter((x) => x.v > 0.5).sort((a, b) => b.v - a.v);
+      const rows = [
+        ['Moc osiągalna wszystkich źródeł', r.pos_sum, 'var(--ink-2)'],
+        ['— ubytki mocy', -r.ub_sum, 'var(--exp)'],
+        ['= moc dyspozycyjna', r.pdysp_sum, 'var(--ink-2)'],
+        ['Obciążenie (praca)', r.obc_sum, 'var(--s2)'],
+        ['Rezerwa mocy', r.rez, 'var(--s1)'],
+      ];
+      const mx = Math.max(...rows.map((x) => Math.abs(x[1] ?? 0)));
+      dayHtml = tilesHtml([
+        { l: `Rezerwa mocy — ${PEAKS[r.peak]} (${esc(r.peak_hour?.slice(11, 16) || '')})`, v: mw(r.rez), d: `zapotrzebowanie ${mw(r.demand)}` },
+        { l: 'Rezerwa wirująca (bloki JWCD w ruchu)', v: mw(r.rez_jgw_wir), d: 'dostępna od razu' },
+        { l: 'Rezerwa zimna (bloki JWCD w postoju)', v: mw(r.rez_jgw_zim), d: 'wymaga uruchomienia bloku' },
+        { l: 'Ubytki mocy', v: mw(r.ub_sum), d: `${fmt0.format((r.ub_sum / r.pos_sum) * 100)}% mocy osiągalnej` },
+      ]) +
+        `<div class="util">${rows.map(([l, v, c]) => `<div class="urow"><div class="uname">${l}</div><div class="utrack"><span class="ubar" style="width:${(Math.abs(v ?? 0) / mx) * 100}%;background:${c}"></span></div><div class="uval"><b>${mw(Math.abs(v ?? 0))}</b></div></div>`).join('')}</div>` +
+        `<h3 class="sub-h">Przyczyny ubytków mocy</h3><div class="util">${causes.map((x) => `<div class="urow"><div class="uname">${x.l}</div><div class="utrack"><span class="ubar" style="width:${(x.v / causes[0].v) * 100}%;background:var(--exp)"></span></div><div class="uval"><b>${mw(x.v)}</b></div></div>`).join('')}</div>` +
+        `<p class="muted small-sum">Rezerwa: wirująca ${mw(r.rez_jgw_wir)}, zimna ${mw(r.rez_jgw_zim)}, elektrownie szczytowo-pompowe i magazyny ${mw(r.rez_jgm)}, OZE sterowane ${mw(r.rez_jgz)}, pozostałe źródła ${mw(r.rez_prb)}. Saldo wymiany z zagranicą: ${r.swm >= 0 ? 'import' : 'eksport'} ${mw(Math.abs(r.swm))}.</p>`;
+    }
+    // Trend: wybrany szczyt, cała historia API (od czerwca 2024).
+    const tr = all.filter((x) => x.peak === resPeak);
+    const tDays = tr.map((x) => x.business_date);
+    const fD = (iso) => new Intl.DateTimeFormat('pl-PL', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(iso + 'T00:00:00Z'));
+    const ticks = tDays.map((d, i) => ({ i, label: MONTHS[+d.slice(5, 7) - 1] + (d.slice(5, 7) === '01' ? ` ${d.slice(0, 4)}` : '') })).filter((x, k) => k > 0 && tDays[k].slice(0, 7) !== tDays[k - 1].slice(0, 7));
+    const sel = tDays.indexOf(date);
+    const tSeries = [
+      { name: 'Rezerwa mocy ogółem', color: 'var(--ink-2)', values: tr.map((x) => x.rez) },
+      { name: 'Rezerwa wirująca JWCD', color: 'var(--s1)', values: tr.map((x) => x.rez_jgw_wir) },
+      { name: 'Rezerwa zimna JWCD', color: 'var(--s3)', values: tr.map((x) => x.rez_jgw_zim) },
+    ];
+    box.innerHTML = seg + dayHtml +
+      `<h3 class="sub-h">Rezerwy w ${PEAKS[resPeak].replace('szczyt', 'szczycie').replace('poranny', 'porannym').replace('wieczorny', 'wieczornym')}, ${fD(tDays[0])} – ${fD(tDays[tDays.length - 1])}</h3><div class="chart" id="reserve-trend"></div>` +
+      table(['Doba', 'Godzina szczytu', 'Zapotrzebowanie', 'Rezerwa ogółem', 'Wirująca JWCD', 'Zimna JWCD', 'Ubytki'], tr.slice().reverse().slice(0, 120).map((x) => [x.business_date, esc(x.peak_hour?.slice(11, 16) || ''), fmt0.format(x.demand), fmt0.format(x.rez), fmt0.format(x.rez_jgw_wir), fmt0.format(x.rez_jgw_zim), fmt0.format(x.ub_sum)])) +
+      '<p class="note">Wykonany bilans mocy KSE w godzinie szczytu (PSE, his-bil-mocy), publikowany następnego dnia. Rezerwa wirująca to wolna moc bloków, które już pracują — mogą ją oddać w ciągu minut; rezerwa zimna to bloki w postoju gotowe do uruchomienia (godziny). Ubytki to moc niedostępna: remonty, ograniczenia ciepłownicze, warunki eksploatacyjne — w tym niedostępność wiatru i PV, gdy nie wieje i nie świeci. PSE nie publikuje samej bezwładności (inercji) systemu.</p>';
+    box.querySelector('.seg').addEventListener('click', (e) => { const b = e.target.closest('button[data-p]'); if (!b) return; resPeak = b.dataset.p; renderReserve(); });
+    drawChart('reserve-trend', $('#reserve-trend'), {
+      n: tr.length, series: tSeries, xTicks: ticks, height: 240, minSpan: 7, nowIndex: sel >= 0 ? sel : null,
+      label: 'Rezerwy mocy w godzinie szczytu, MW',
+      tooltip: (i, on) => tipRows(`${fD(tDays[i])}, ${esc(tr[i].peak_hour?.slice(11, 16) || '')}`, tSeries.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) }))),
+    }, 'reserve-trend');
+    run.restore();
+  } catch (e) {
+    if (run.stale()) return;
+    box.innerHTML = errorBox(e);
+  }
+}
+
+// ---------- Plan koordynacyjny dobowy: zapas mocy (pdgopkd — PKD z dnia poprzedniego, pdgobpkd — bieżący BPKD) ----------
+async function renderPkd({ silent = false } = {}) {
+  const box = $('#pkd-body');
+  const run = begin(box, silent);
+  try {
+    const [pkd, bpkd] = await Promise.all([pseDay('pdgopkd', 500), pseDay('pdgobpkd', 500)]);
+    if (run.stale()) return;
+    if (!pkd.length && !bpkd.length) return void (box.innerHTML = empty('Brak planu PSE dla wybranej doby.'));
+    const grid = dayGrid(date, Q);
+    const n = grid.starts.length;
+    const f = (rows, k) => {
+      const a = new Array(n).fill(null);
+      for (const r of rows) { const i = grid.index.get(utc(r.dtime_utc) - Q); if (i != null && r[k] != null) a[i] = r[k]; }
+      return a;
+    };
+    const overP = f(pkd, 'rez_over_demand');
+    const overB = f(bpkd, 'rez_over_demand');
+    const underP = f(pkd, 'rez_under');
+    const underB = f(bpkd, 'rez_under');
+    const best = bpkd.length ? bpkd : pkd;
+    const dem = f(best, 'kse_pow_dem');
+    const wi = f(best, 'gen_wi');
+    const pv = f(best, 'gen_fv');
+    const ogr = f(best, 'ogr_mwe');
+    const minOf = (a) => a.reduce((m, v, i) => (v != null && (m < 0 || v < a[m]) ? i : m), -1);
+    const iO = minOf(overB.some((v) => v != null) ? overB : overP);
+    const iU = minOf(underB.some((v) => v != null) ? underB : underP);
+    const oArr = overB.some((v) => v != null) ? overB : overP;
+    const uArr = underB.some((v) => v != null) ? underB : underP;
+    const s1 = [{ name: 'Plan dnia poprzedniego (PKD)', color: 'var(--s1)', values: overP }, { name: 'Plan bieżący (BPKD)', color: 'var(--s2)', values: overB }];
+    const s2 = [{ name: 'Plan dnia poprzedniego (PKD)', color: 'var(--s1)', values: underP }, { name: 'Plan bieżący (BPKD)', color: 'var(--s2)', values: underB }];
+    box.innerHTML = tilesHtml([
+      iO >= 0 && { l: 'Najmniejszy zapas mocy w górę', v: mw(oArr[iO]), d: period(grid, iO) },
+      iU >= 0 && { l: 'Najmniejsza rezerwa w dół', v: mw(uArr[iU]), d: `${period(grid, iU)} — ile można jeszcze zmniejszyć produkcję` },
+      { l: 'Planowane ograniczenia dostępności źródeł', v: mw(Math.max(...ogr.filter((v) => v != null), 0)), d: 'maksimum w dobie' },
+    ].filter(Boolean)) +
+      '<h3 class="sub-h">Zapas mocy ponad zapotrzebowanie</h3><div class="chart" id="pkd-over"></div>' +
+      '<h3 class="sub-h">Rezerwa w dół (poniżej zapotrzebowania)</h3><div class="chart" id="pkd-under"></div>' +
+      table(['Okres', 'Zapotrzebowanie', 'Wiatr', 'PV', 'Zapas w górę PKD', 'Zapas w górę BPKD', 'Rezerwa w dół PKD', 'Rezerwa w dół BPKD'], grid.starts.map((_, i) => [period(grid, i), ...[dem, wi, pv, overP, overB, underP, underB].map((a) => (a[i] == null ? '—' : fmt0.format(a[i])))])) +
+      '<p class="note">Plan koordynacyjny dobowy PSE — wielkości podstawowe (pdgopkd: plan sporządzony dzień wcześniej, pdgobpkd: plan bieżący, aktualizowany w trakcie doby). Zapas w górę to moc, którą źródła mogą jeszcze dołożyć ponad planowane zapotrzebowanie; rezerwa w dół — o ile można zmniejszyć produkcję, gdy energii jest za dużo (mały zapas w dół to typowa przyczyna redukcji OZE i zaleceń zużywania prądu w Kompasie).</p>';
+    const common = { n, xTicks: xTicks(grid), height: 220, nowIndex: date === todayIso() ? nowIndex(grid) : null };
+    const tip = (series) => (i, on) => tipRows(period(grid, i), [...series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Zapotrzebowanie', value: mw(dem[i]) }, { name: 'Wiatr + PV', value: mw((wi[i] ?? 0) + (pv[i] ?? 0)) }]);
+    drawChart('pkd-over', $('#pkd-over'), { ...common, series: s1, label: 'Zapas mocy ponad zapotrzebowanie, MW', tooltip: tip(s1) });
+    drawChart('pkd-under', $('#pkd-under'), { ...common, series: s2, label: 'Rezerwa mocy w dół, MW', tooltip: tip(s2) });
+    run.restore();
+  } catch (e) {
+    if (run.stale()) return;
+    box.innerHTML = errorBox(e);
+  }
+}
+
+// ---------- Ograniczenia i niedostępność bloków (pdwkseub, ogr-oper, unav-pk5l) ----------
+const OUT_REASONS = { RA: 'remont awaryjny', RS: 'remont średni', RK: 'remont kapitalny', RB: 'remont bieżący', OS: 'oswajanie inwestycji', WE: 'warunki eksploatacyjne', Q: 'ciepłownictwo' };
+async function renderLimits({ silent = false } = {}) {
+  const box = $('#limits-body');
+  const run = begin(box, silent);
+  try {
+    const next = addDays(date, 1);
+    const [av, ogr, unav] = await Promise.all([
+      pseDay('pdwkseub', 20000),
+      pseDay('ogr-oper', 2000),
+      pseMemo('unav-pk5l', `start_dtime le '${next} 00:00' and end_dtime ge '${date} 00:00'`, 3000),
+    ]);
+    if (run.stale()) return;
+    const grid = dayGrid(date, Q);
+    const n = grid.starts.length;
+    // Dostępna moc według paliwa (paliwo z PLANT_FUEL, jak w sekcji elektrowni).
+    const byFuel = new Map();
+    const unit = new Map();
+    const nonUs = new Array(n).fill(null);
+    const gridLim = new Array(n).fill(null);
+    for (const r of av) {
+      const i = grid.index.get(utc(r.dtime_utc) - Q);
+      if (i == null) continue;
+      const fuel = plantFuel(r.power_plant);
+      if (!byFuel.has(fuel)) byFuel.set(fuel, new Array(n).fill(null));
+      byFuel.get(fuel)[i] = (byFuel.get(fuel)[i] ?? 0) + (r.non_us_cap ?? 0) + (r.grid_lim ?? 0);
+      nonUs[i] = (nonUs[i] ?? 0) + (r.non_us_cap ?? 0);
+      gridLim[i] = (gridLim[i] ?? 0) + (r.grid_lim ?? 0);
+      const u = unit.get(r.resource_code) || { plant: r.power_plant, code: r.resource_code, avail: 0, non: 0, grid: 0, k: 0, maxNon: 0 };
+      u.avail += r.available_capacity ?? 0; u.non += r.non_us_cap ?? 0; u.grid += r.grid_lim ?? 0; u.k++; u.maxNon = Math.max(u.maxNon, r.non_us_cap ?? 0);
+      unit.set(r.resource_code, u);
+    }
+    const fuels = Object.keys(FUELS).filter((f) => byFuel.has(f) && byFuel.get(f).some((v) => v > 0));
+    const avSeries = fuels.map((f) => ({ name: FUELS[f].name, color: FUELS[f].color, values: byFuel.get(f) }));
+    const avg = (a) => { const x = a.filter((v) => v != null); return x.length ? x.reduce((s, v) => s + v, 0) / x.length : null; };
+    const units = [...unit.values()].map((u) => ({ ...u, avail: u.avail / u.k, non: u.non / u.k, grid: u.grid / u.k }));
+    const topGrid = units.filter((u) => u.grid > 0.5).sort((a, b) => b.grid - a.grid);
+    // Postoje: aktywne zgłoszenia (AK), ostatnia wersja każdego zgłoszenia.
+    const outMap = new Map();
+    for (const o of unav) {
+      if (o.state !== 'AK') continue;
+      const prev = outMap.get(o.mrid_zas);
+      if (!prev || prev.publication_ts < o.publication_ts) outMap.set(o.mrid_zas, o);
+    }
+    const outs = [...outMap.values()].sort((a, b) => (a.power_plant + a.unit_code < b.power_plant + b.unit_code ? -1 : 1));
+    const unitMw = (code) => unit.get(code)?.maxNon;
+    const outByReason = Object.entries(OUT_REASONS).map(([k, l]) => ({ l, k, list: outs.filter((o) => o.reason === k) })).filter((x) => x.list.length);
+    const fDT = (s) => (s ? `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)} ${s.slice(11, 16)}` : '—');
+    const ogrRows = ogr.slice().sort((a, b) => (a.from_dtime < b.from_dtime ? -1 : 1));
+    box.innerHTML = (av.length ? tilesHtml([
+      { l: 'Bloki ze zgłoszonymi ubytkami', v: `${unit.size}`, d: `w ${new Set(units.map((u) => u.plant)).size} elektrowniach` },
+      { l: 'Ubytki elektrowniane', v: mw(avg(nonUs)), d: 'średnio: remonty, awarie, ograniczenia techniczne' },
+      { l: 'Ubytki sieciowe', v: mw(avg(gridLim)), d: 'średnio: moc, której nie da się wyprowadzić przez sieć' },
+      { l: 'Postoje bloków', v: `${outs.length}`, d: outByReason.map((x) => `${x.l}: ${x.list.length}`).join(', ') },
+    ]) +
+      '<h3 class="sub-h">Ubytki mocy (elektrowniane + sieciowe) według paliwa</h3><div class="chart" id="limits-av"></div>' +
+      (topGrid.length ? `<h3 class="sub-h">Bloki ograniczane przez sieć</h3><div class="util">${topGrid.slice(0, 12).map((u) => `<div class="urow"><div class="uname"><i class="sw" style="background:${FUELS[plantFuel(u.plant)].color}"></i>${esc(u.plant)} <span class="muted">· ${esc(u.code)}</span></div><div class="utrack"><span class="ubar" style="width:${(u.grid / topGrid[0].grid) * 100}%;background:var(--exp)"></span></div><div class="uval"><b>${mw(u.grid)}</b> <span class="muted">średnio</span></div></div>`).join('')}</div>` : '') : empty('Brak danych o dostępności jednostek dla wybranej doby.')) +
+      `<h3 class="sub-h">Ograniczenia pracy bloków nałożone przez PSE (${ogrRows.length})</h3>` +
+      (ogrRows.length ? table(['Od', 'Do', 'Bloki', 'Kierunek', 'Min. liczba bloków', 'Min. moc [MW]', 'Maks. liczba bloków', 'Maks. moc [MW]', 'Przyczyna', 'Element ograniczający'], ogrRows.map((o) => [fDT(o.from_dtime), fDT(o.to_dtime), esc(o.resource_code || o.resource_name || ''), esc(o.direction || ''), o.pol_min_power_of_unit_plant ?? '—', o.pol_min_power_of_unit == null ? '—' : fmt0.format(o.pol_min_power_of_unit), o.pol_max_power_of_unit ?? '—', o.pol_max_power_of_unit_plant == null ? '—' : fmt0.format(o.pol_max_power_of_unit_plant), esc(o.add_cond || ''), esc(o.limiting_element || '')])).replace('<details class="table-view">', '<details class="table-view" open>') : '<p class="muted">Brak ograniczeń operacyjnych w tej dobie.</p>') +
+      `<h3 class="sub-h">Postoje bloków w tej dobie (${outs.length})</h3>` +
+      (outs.length ? table(['Elektrownia', 'Blok', 'Paliwo', 'Przyczyna', 'Od', 'Do', 'Ubytek [MW]'], outs.map((o) => [esc(o.power_plant), esc(o.unit_code), FUELS[plantFuel(o.power_plant)].name, OUT_REASONS[o.reason] || esc(o.reason), fDT(o.start_dtime), fDT(o.end_dtime), unitMw(o.unit_code) ? fmt0.format(unitMw(o.unit_code)) : '—'])) : '<p class="muted">Brak zgłoszonych postojów.</p>') +
+      '<p class="note">Ubytki jednostek (PSE, pdwkseub): ubytki elektrowniane (remonty, awarie, ograniczenia techniczne) i sieciowe (moc, której sieć nie jest w stanie przyjąć) co 15 minut — PSE podaje tu tylko jednostki, które zgłosiły ubytki, więc suma „dostępnych zdolności” z tego raportu nie jest mocą całego systemu (tę pokazuje sekcja „Rezerwy mocy i ubytki”). Ograniczenia operacyjne (ogr-oper): wymagania PSE co do liczby pracujących bloków i ich mocy w danym węźle sieci — np. minimalna liczba bloków, które muszą pracować, żeby utrzymać napięcia i niezawodność pracy KSE (kierunek „G/P” jak w raporcie PSE). Postoje (unav-pk5l): aktywne zgłoszenia remontów i niedostępności w planie koordynacyjnym; ubytek w MW to największa deklarowana niedostępność bloku w tej dobie.</p>';
+    if (av.length) drawChart('limits-av', $('#limits-av'), {
+      n, stacked: true, series: avSeries, xTicks: xTicks(grid), height: 240, label: 'Ubytki mocy dużych jednostek według paliwa, MW', nowIndex: date === todayIso() ? nowIndex(grid) : null,
+      tooltip: (i, on) => tipRows(period(grid, i), [...avSeries.slice().reverse().filter((s) => on(s.name) && s.values[i] > 0).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Ubytki elektrowniane', value: mw(nonUs[i]) }, { name: 'Ubytki sieciowe', value: mw(gridLim[i]) }]),
+    });
+    run.restore();
+  } catch (e) {
+    if (run.stale()) return;
+    box.innerHTML = errorBox(e);
+  }
+}
+
+// ---------- Rynek bilansujący: uruchomiona energia i zakupione rezerwy (eb-rozl, mbp-tp + mbu-tu, cmbp-tp) ----------
+const RES_TYPES = [['fcr', 'FCR (regulacja pierwotna)', 'var(--s1)'], ['afrr', 'aFRR (automatyczna wtórna)', 'var(--s2)'], ['mfrrd', 'mFRR (ręczna)', 'var(--s3)'], ['rr', 'RR (rezerwa zastępcza)', 'var(--s4)']];
+async function renderBalAct({ silent = false } = {}) {
+  const box = $('#balact-body');
+  const run = begin(box, silent);
+  try {
+    // Rezerwy kupowane są w trybie podstawowym (mbp-tp, dzień wcześniej, godzinowo) i uzupełniającym (mbu-tu, kwadransowo).
+    const [eb, mbu, mbp, cmbp] = await Promise.all([pseDay('eb-rozl', 500), pseDay('mbu-tu', 500), pseDay('mbp-tp', 100), pseDay('cmbp-tp', 100)]);
+    if (run.stale()) return;
+    const grid = dayGrid(date, Q);
+    const n = grid.starts.length;
+    const f = (rows, k, sign = 1) => {
+      const a = new Array(n).fill(null);
+      for (const r of rows) { const i = grid.index.get(utc(r.dtime_utc) - Q); if (i != null && r[k] != null) a[i] = sign * r[k]; }
+      return a;
+    };
+    const sumE = (a) => a.reduce((s, v) => s + (v ?? 0), 0);
+    // Dane godzinowe (dtime_utc = koniec godziny) rozkładamy na kwadranse tej godziny.
+    const fh = (rows, k, sign = 1) => {
+      const byH = new Map(rows.map((r) => [utc(r.dtime_utc) - HOUR, r[k]]));
+      return grid.starts.map((t) => { const v = byH.get(t - (t % HOUR)); return v == null ? null : sign * v; });
+    };
+    const tot = (k, sign = 1) => { const a = fh(mbp, k, sign); const b = f(mbu, k, sign); return a.map((v, i) => (v == null && b[i] == null ? null : (v ?? 0) + (b[i] ?? 0))); };
+    const mbuAll = mbp.length || mbu.length;
+    const up = f(eb, 'eb_d_pp');
+    const down = f(eb, 'eb_w_pp');
+    const aUp = f(eb, 'eb_afrrg');
+    const aDown = f(eb, 'eb_afrrd');
+    const ebSeries = [
+      { name: 'Energia bilansująca dostarczona (w górę)', color: 'var(--s2)', values: up },
+      { name: 'Energia bilansująca odebrana (w dół)', color: 'var(--s1)', values: down },
+      { name: 'w tym aFRR w górę', color: 'var(--s4)', values: aUp },
+      { name: 'w tym aFRR w dół', color: 'var(--s3)', values: aDown },
+    ];
+    const capSeries = RES_TYPES.flatMap(([k, l, c]) => [{ name: `${l} ↑`, color: c, values: tot(`${k}_g`) }, { name: `${l} ↓`, color: c, values: tot(`${k}_d`, -1) }]).filter((x) => x.values.some((v) => v));
+    const priceSeries = RES_TYPES.map(([k, l, c]) => ({ name: `${l} ↑`, color: c, values: fh(cmbp, `${k}_g`) })).filter((x) => x.values.some((v) => v != null));
+    const avgUp = (k) => sumE(tot(`${k}_g`)) / n;
+    const hasEb = eb.length > 0;
+    box.innerHTML = tilesHtml([
+      hasEb && { l: 'Energia bilansująca w górę', v: `${fmt0.format(sumE(up))} MWh`, d: `w tym aFRR ${fmt0.format(sumE(aUp))} MWh` },
+      hasEb && { l: 'Energia bilansująca w dół', v: `${fmt0.format(Math.abs(sumE(down)))} MWh`, d: `w tym aFRR ${fmt0.format(Math.abs(sumE(aDown)))} MWh` },
+      mbuAll && { l: 'Zakupione rezerwy w górę (średnio)', v: mw(RES_TYPES.reduce((s, [k]) => s + avgUp(k), 0)), d: RES_TYPES.filter(([k]) => avgUp(k) > 0.5).map(([k, l]) => `${l.split(' ')[0]} ${fmt0.format(avgUp(k))}`).join(' · ') + ' MW' },
+    ].filter(Boolean)) +
+      `<h3 class="sub-h">Uruchomiona energia bilansująca, MWh w kwadransie</h3>${hasEb ? '<div class="chart" id="balact-eb"></div>' : '<p class="muted">Dane rozliczeniowe PSE publikuje z opóźnieniem 1–2 dni.</p>'}` +
+      `<h3 class="sub-h">Zakupione rezerwy mocy bilansującej, MW</h3>${mbuAll ? '<div class="chart" id="balact-cap"></div>' : '<p class="muted">Brak danych.</p>'}` +
+      `<h3 class="sub-h">Cena zakupu rezerw w górę (tryb podstawowy), zł/MW/h</h3>${cmbp.length ? '<div class="chart" id="balact-price"></div>' : '<p class="muted">Brak danych.</p>'}` +
+      table(['Okres', 'EB w górę', 'EB w dół', 'aFRR w górę', 'aFRR w dół', ...capSeries.map((x) => `${x.name.split(' ')[0]} ${x.name.endsWith('↑') ? '↑' : '↓'} [MW]`)], grid.starts.map((_, i) => [period(grid, i), ...[up, down, aUp, aDown].map((a) => (a[i] == null ? '—' : fmt0.format(a[i]))), ...capSeries.map((s) => (s.values[i] == null ? '—' : fmt0.format(Math.abs(s.values[i]))))])) +
+      '<p class="note">Energia bilansująca (PSE, eb-rozl) — ile energii PSE faktycznie „przywołało” w każdym kwadransie: dostarczonej (zwiększenie produkcji lub zmniejszenie poboru) i odebranej (odwrotnie), w tym przez automatyczną regulację aFRR; dane rozliczeniowe z opóźnieniem. Rezerwy — moc bilansująca zakupiona w trybie podstawowym (mbp-tp, aukcja dzień wcześniej, godzinowo) i uzupełniającym (mbu-tu, kwadransowo); na wykresie suma obu. Cena to cena zakupu w trybie podstawowym (cmbp-tp). FCR stabilizuje częstotliwość w sekundach, aFRR automatycznie w minutach, mFRR na polecenie dyspozytora, RR zastępuje wykorzystane rezerwy. Wezwania z rynku mocy (okresy zagrożenia) PSE ogłasza komunikatami — nie ma ich w API.</p>';
+    const common = { n, xTicks: xTicks(grid), nowIndex: date === todayIso() ? nowIndex(grid) : null };
+    const tip = (series, unit) => (i, on) => tipRows(period(grid, i), series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: s.values[i] == null ? '—' : `${fmt0.format(Math.abs(s.values[i]))} ${unit}` })));
+    if (hasEb) drawChart('balact-eb', $('#balact-eb'), { ...common, series: ebSeries, step: true, height: 240, label: 'Uruchomiona energia bilansująca, MWh', tooltip: tip(ebSeries, 'MWh') });
+    if (mbuAll) drawChart('balact-cap', $('#balact-cap'), { ...common, series: capSeries, step: true, height: 240, label: 'Zakupione rezerwy mocy bilansującej (w dół ujemne), MW', tooltip: tip(capSeries, 'MW') });
+    if (cmbp.length) drawChart('balact-price', $('#balact-price'), { ...common, series: priceSeries, step: true, height: 200, label: 'Cena zakupu rezerw w górę, zł/MW/h', tooltip: tip(priceSeries, 'zł/MW/h') });
+    run.restore();
+  } catch (e) {
+    if (run.stale()) return;
+    box.innerHTML = errorBox(e);
+  }
+}
+
 // ---------- Alert ----------
 async function renderAlert() {
   try {
@@ -1272,6 +1524,10 @@ function loadDay() {
   renderUnits();
   renderPlan();
   renderLolp();
+  renderReserve();
+  renderPkd();
+  renderLimits();
+  renderBalAct();
   renderGen();
   renderRce();
 }
@@ -1308,5 +1564,8 @@ setInterval(() => {
     renderGen(silent);
     renderKompas(silent);
     renderRce(silent);
+    renderPkd(silent);
+    renderLimits(silent);
+    renderBalAct(silent);
   }
 }, 5 * 60e3);

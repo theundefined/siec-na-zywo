@@ -198,3 +198,17 @@ API PSE (`gen-jw`, `pdwkseub`, `unav-pk5l`) nie podaje paliwa jednostek. `PLANT_
 informacji właścicieli (stan: 09.2026; m.in. Gryfino = bloki gazowo-parowe 9 i 10 Dolnej Odry, Połaniec 2-Pasywna = „Zielony
 Blok” na biomasę, Zwartowo = farma PV ok. 204 MW, Rybnik = bloki węglowe do czasu uruchomienia bloku gazowego). Nowe nazwy
 elektrowni z API trafiają do „paliwo nieznane” i są wymienione w przypisie sekcji — wtedy trzeba uzupełnić listę.
+
+### Rezerwy, plan dobowy, ograniczenia bloków, przywołania na RB
+| Endpoint | Sekcja | Uwagi |
+|---|---|---|
+| `his-bil-mocy` | Rezerwy mocy i ubytki | wykonany bilans mocy w szczycie porannym (`SR`) i wieczornym (`SW`), dobowo od 06.2024; `rez_jgw_wir` rezerwa wirująca, `rez_jgw_zim` zimna, ubytki `rk/rs/rb/ra` (remonty kapitalne/średnie/bieżące/awaryjne), `we` warunki eksploatacyjne (m.in. brak wiatru/słońca), `ciep`, `inw`; `_jg` aktywni uczestnicy RB, `_prb` pozostali. Bezwładności (inercji) PSE nie publikuje |
+| `pdgopkd` / `pdgobpkd` | Plan PSE na dobę | PKD (dzień wcześniej) i BPKD (bieżący): `rez_over_demand` zapas w górę, `rez_under` rezerwa w dół, `ogr_mwe` planowane ograniczenia dostępności |
+| `pdwkseub` | Ograniczenia i postoje | tylko jednostki ze zgłoszonymi ubytkami: `non_us_cap` ubytki elektrowniane, `grid_lim` sieciowe (suma `available_capacity` nie jest mocą systemu) |
+| `ogr-oper` | Ograniczenia i postoje | polecenia PSE dla bloków w węzłach; liczby całkowite w `pol_min_power_of_unit_plant` / `pol_max_power_of_unit` to liczby bloków, pozostałe pola — MW (ustalone z danych, etykiety w UI PSE są niespójne) |
+| `unav-pk5l` | Ograniczenia i postoje | postoje: `state` AK = aktywne (AN pomijamy), `reason` RA/RS/RK/RB/OS/WE/Q; ostatnia wersja po `mrid_zas` |
+| `eb-rozl` | Przywołania RB | energia bilansująca dostarczona/odebrana, w tym aFRR, MWh/kwadrans, rozliczeniowo (1–2 dni) |
+| `mbp-tp` + `mbu-tu`, `cmbp-tp` | Przywołania RB | rezerwy kupione w trybie podstawowym (godzinowo) i uzupełniającym (kwadransowo) — sumujemy; cena z trybu podstawowego |
+
+Pominięte: `krb-rozl` (KB/KO/KCZ — w danych KCZ = KO − KB, niezgodnie z definicjami, które udało się znaleźć) i `csire-kpi*`
+(brak opisów pól). Okresów zagrożenia rynku mocy nie ma w API.

@@ -1,6 +1,6 @@
 // Service worker: pozwala zainstalować stronę jako aplikację i otworzyć ją bez sieci (ostatnia wersja plików strony).
 // Dane (PSE, ENTSOG, pliki aplikacji, ceny gazu) zawsze pobieramy z sieci — nie są buforowane.
-const CACHE = 'siec-na-zywo-v7';
+const CACHE = 'siec-na-zywo-v8';
 const SHELL = ['./', 'index.html', 'gaz.html', 'style.css', 'app.js', 'gas.js', 'common.js', 'charts.js', 'stats.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
