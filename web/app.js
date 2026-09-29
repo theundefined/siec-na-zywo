@@ -1,6 +1,6 @@
-import { renderMix, renderBills } from './stats.js';
+import { renderMix, renderBills, renderRenYear, renderElecYear } from './stats.js';
 import { tipRows, placeTip, hideTip, fmt0, fmt2 } from './charts.js';
-import { pse, FILES, TZ, HOUR, fKey, warsaw, todayIso, addDays, MONTHS, $, plural, esc, mw, errorBox, empty, table, tilesHtml, redraws, views, drawChart, initTheme, initInstall } from './common.js';
+import { pse, FILES, TZ, HOUR, fKey, warsaw, todayIso, addDays, MONTHS, $, plural, esc, mw, errorBox, empty, table, tilesHtml, redraws, views, drawChart, initTheme, initInstall, initTabs, clearGroups } from './common.js';
 
 // ---------- Źródła danych (te same co w aplikacji Energetyczny Kompas) ----------
 
@@ -1177,9 +1177,7 @@ async function renderAlert() {
 
 // ---------- Start ----------
 function loadDay() {
-  redraws.clear();
-  views.delete('day');
-  views.delete('plan');
+  clearGroups('day', 'plan');
   memo.clear();
   renderKompas();
   renderLoad();
@@ -1202,13 +1200,13 @@ $('#date').addEventListener('change', (e) => e.target.value && setDate(e.target.
 
 initTheme();
 initInstall();
-setDate(date);
-renderNow();
-renderRcem();
-renderCo2();
-renderMix();
-renderBills();
 renderAlert();
+// Zakładki: dane dzienne ładujemy od razu (domyślny widok i odświeżanie), miesięczne i roczne — przy pierwszym otwarciu.
+initTabs({
+  d: () => { setDate(date); renderNow(); renderCo2(); },
+  m: () => { renderRcem(); renderMix(); },
+  r: () => { renderElecYear(); renderRenYear(); renderBills(); },
+});
 
 // Odświeżanie: bilans co minutę, dane doby co 5 minut (gdy oglądamy dziś).
 setInterval(renderNow, 60e3);

@@ -25,10 +25,10 @@
         <nav class="tabs" aria-label="Rodzaj danych"><a href="./" aria-current="page">Prąd</a><a href="gaz.html">Gaz</a></nav>
       </div>
       <nav class="datenav" aria-label="Wybór dnia">
-        <button id="prev" type="button" aria-label="Poprzedni dzień">‹</button>
+        <span class="datectl" data-view="d"><button id="prev" type="button" aria-label="Poprzedni dzień">‹</button>
         <input id="date" type="date" aria-label="Data">
         <button id="next" type="button" aria-label="Następny dzień">›</button>
-        <button id="today" type="button" class="ghost">Dziś</button>
+        <button id="today" type="button" class="ghost">Dziś</button></span>
         <button id="install" type="button" class="ghost install" hidden>Zainstaluj aplikację</button>
         <button id="theme" type="button" class="ghost">Motyw: auto</button>
       </nav>
@@ -37,13 +37,14 @@
 
   <main class="wrap">
     <div id="alert" class="alert" role="status" hidden></div>
-    <p id="date-label" class="date-label"></p>
+    <nav id="views" class="views" role="tablist" aria-label="Rodzaj danych"></nav>
+    <p id="date-label" class="date-label" data-view="d"></p>
     <nav class="toc" aria-label="Sekcje">
-      <a href="#kompas">Kompas</a><a href="#now">Bilans teraz</a><a href="#load">Zapotrzebowanie</a><a href="#bal">Produkcja vs zapotrz.</a><a href="#gen">Struktura generacji</a><a href="#util">Wykorzystanie mocy</a><a href="#rce">RCE</a><a href="#prices">Ceny RDN i RB</a><a href="#curt">Redukcje OZE</a><a href="#units">Elektrownie</a><a href="#plan">Prognoza 7 dni</a><a href="#lolp">LOLP</a><a href="#rcem">RCEm</a><a href="#co2">CO₂</a><a href="#mix">Miks miesięcznie i OZE</a><a href="#bills">Ceny dla odbiorców</a>
+      <a href="#kompas" data-view="d">Kompas</a><a href="#now" data-view="d">Bilans teraz</a><a href="#load" data-view="d">Zapotrzebowanie</a><a href="#bal" data-view="d">Produkcja vs zapotrz.</a><a href="#gen" data-view="d">Struktura generacji</a><a href="#util" data-view="d">Wykorzystanie mocy</a><a href="#rce" data-view="d">RCE</a><a href="#prices" data-view="d">Ceny RDN i RB</a><a href="#curt" data-view="d">Redukcje OZE</a><a href="#units" data-view="d">Elektrownie</a><a href="#plan" data-view="d">Prognoza 7 dni</a><a href="#lolp" data-view="d">LOLP</a><a href="#rcem" data-view="m">RCEm</a><a href="#co2" data-view="d">CO₂</a><a href="#mix" data-view="m">Miks i OZE miesięcznie</a><a href="#elec-y" data-view="r">Bilans roczny</a><a href="#ren-y" data-view="r">OZE rocznie</a><a href="#bills" data-view="r">Ceny dla odbiorców</a>
     </nav>
-    <p class="chart-hint">Wykresy: przeciągnij myszą, by powiększyć zakres · Ctrl + kółko przybliża/oddala · dwuklik przywraca pełny zakres · kliknięcie w legendzie ukrywa/pokazuje serię (dwuklik — tylko ta seria). Powiększenie jest wspólne dla wykresów doby.</p>
+    <p class="chart-hint" data-view="d m r">Wykresy: przeciągnij myszą, by powiększyć zakres · Ctrl + kółko przybliża/oddala · dwuklik przywraca pełny zakres · kliknięcie w legendzie ukrywa/pokazuje serię (dwuklik — tylko ta seria). Powiększenie jest wspólne dla wykresów doby.</p>
 
-    <section class="card" id="kompas" aria-labelledby="kompas-h">
+    <section class="card" id="kompas" data-view="d" aria-labelledby="kompas-h">
       <div class="card-head">
         <h2 id="kompas-h">Kompas — kiedy korzystać z prądu</h2>
         <p class="muted">Prognoza PSE dla każdej godziny doby</p>
@@ -51,7 +52,7 @@
       <div id="kompas-body"></div>
     </section>
 
-    <section class="card" id="now" aria-labelledby="now-h">
+    <section class="card" id="now" data-view="d" aria-labelledby="now-h">
       <div class="card-head">
         <h2 id="now-h">Bilans systemu teraz</h2>
         <p class="muted"><span id="now-time">—</span> · odświeżane co minutę, niezależnie od wybranego dnia</p>
@@ -59,7 +60,7 @@
       <div id="now-body"><p class="state">Ładowanie…</p></div>
     </section>
 
-    <section class="card" id="load" aria-labelledby="load-h">
+    <section class="card" id="load" data-view="d" aria-labelledby="load-h">
       <div class="card-head">
         <h2 id="load-h">Zapotrzebowanie na moc (KSE)</h2>
         <p class="muted">Prognoza a rzeczywiste zużycie, kwadranse, MW</p>
@@ -67,7 +68,7 @@
       <div id="load-body"></div>
     </section>
 
-    <section class="card" id="bal" aria-labelledby="bal-h">
+    <section class="card" id="bal" data-view="d" aria-labelledby="bal-h">
       <div class="card-head">
         <h2 id="bal-h">Zapotrzebowanie a produkcja</h2>
         <p class="muted">Rzeczywiste zapotrzebowanie KSE i łączna generacja krajowa, kwadranse, MW</p>
@@ -75,7 +76,7 @@
       <div id="bal-body"></div>
     </section>
 
-    <section class="card" id="gen" aria-labelledby="gen-h">
+    <section class="card" id="gen" data-view="d" aria-labelledby="gen-h">
       <div class="card-head">
         <h2 id="gen-h">Dobowa struktura generacji</h2>
         <p class="muted">Moc według źródeł, kwadranse, MW</p>
@@ -83,7 +84,7 @@
       <div id="gen-body"></div>
     </section>
 
-    <section class="card" id="util" aria-labelledby="util-h">
+    <section class="card" id="util" data-view="d" aria-labelledby="util-h">
       <div class="card-head">
         <h2 id="util-h">Wykorzystanie mocy źródeł</h2>
         <p class="muted">Jaki procent mocy osiągalnej danego rodzaju źródeł pracuje</p>
@@ -91,7 +92,7 @@
       <div id="util-body"></div>
     </section>
 
-    <section class="card" id="rce" aria-labelledby="rce-h">
+    <section class="card" id="rce" data-view="d" aria-labelledby="rce-h">
       <div class="card-head">
         <h2 id="rce-h">Rynkowa cena energii (RCE)</h2>
         <p class="muted">Cena w kwadransach, zł/MWh — podstawa rozliczeń prosumentów w net-billingu</p>
@@ -99,7 +100,7 @@
       <div id="rce-body"></div>
     </section>
 
-    <section class="card" id="prices" aria-labelledby="prices-h">
+    <section class="card" id="prices" data-view="d" aria-labelledby="prices-h">
       <div class="card-head">
         <h2 id="prices-h">Ceny energii: RDN i rynek bilansujący</h2>
         <p class="muted">Cena rynku dnia następnego (CSDAC) na tle cen rozliczeniowych rynku bilansującego, kwadranse, zł/MWh</p>
@@ -107,7 +108,7 @@
       <div id="prices-body"></div>
     </section>
 
-    <section class="card" id="curt" aria-labelledby="curt-h">
+    <section class="card" id="curt" data-view="d" aria-labelledby="curt-h">
       <div class="card-head">
         <h2 id="curt-h">Redukcje generacji OZE</h2>
         <p class="muted">Moc PV i farm wiatrowych ograniczona poleceniem PSE, kwadranse, MW</p>
@@ -115,7 +116,7 @@
       <div id="curt-body"></div>
     </section>
 
-    <section class="card" id="units" aria-labelledby="units-h">
+    <section class="card" id="units" data-view="d" aria-labelledby="units-h">
       <div class="card-head">
         <h2 id="units-h">Praca dużych elektrowni</h2>
         <p class="muted">Jednostki centralnie dysponowane (JWCD) — moc i energia według elektrowni</p>
@@ -123,7 +124,7 @@
       <div id="units-body"></div>
     </section>
 
-    <section class="card" id="plan" aria-labelledby="plan-h">
+    <section class="card" id="plan" data-view="d" aria-labelledby="plan-h">
       <div class="card-head">
         <h2 id="plan-h">Prognoza PSE na 7 dni</h2>
         <p class="muted">Zapotrzebowanie, wiatr, PV i zapas mocy — godzinowo od wybranego dnia</p>
@@ -131,7 +132,7 @@
       <div id="plan-body"></div>
     </section>
 
-    <section class="card" id="lolp" aria-labelledby="lolp-h">
+    <section class="card" id="lolp" data-view="d" aria-labelledby="lolp-h">
       <div class="card-head">
         <h2 id="lolp-h">Ryzyko niedoboru mocy (LOLP)</h2>
         <p class="muted">Prawdopodobieństwo niedoboru przy danej rezerwie mocy, kwadranse</p>
@@ -139,30 +140,46 @@
       <div id="lolp-body"></div>
     </section>
 
-    <section class="card" id="rcem" aria-labelledby="rcem-h">
+    <section class="card" id="rcem" data-view="m" aria-labelledby="rcem-h">
       <div class="card-head">
         <h2 id="rcem-h">Miesięczna cena energii (RCEm)</h2>
         <p class="muted">zł/MWh, porównanie lat</p>
       </div>
       <div id="rcem-body"><p class="state">Ładowanie…</p></div>
     </section>
-    <section class="card" id="co2" aria-labelledby="co2-h">
+    <section class="card" id="co2" data-view="d" aria-labelledby="co2-h">
       <div class="card-head">
         <h2 id="co2-h">Ceny uprawnień do emisji CO₂</h2>
-        <p class="muted">Ostatnie 12 miesięcy, €/t</p>
+        <p class="muted">Ceny dzienne z ostatnich 12 miesięcy, €/t — niezależnie od wybranego dnia</p>
       </div>
       <div id="co2-body"></div>
     </section>
 
-    <section class="card" id="mix" aria-labelledby="mix-h">
+    <section class="card" id="mix" data-view="m" aria-labelledby="mix-h">
       <div class="card-head">
-        <h2 id="mix-h">Miks energetyczny miesięcznie i udział OZE</h2>
-        <p class="muted">Produkcja prądu według paliw, udział OZE i wymiana z zagranicą — oficjalna statystyka (Eurostat), niezależnie od wybranego dnia</p>
+        <h2 id="mix-h">Miks energetyczny i udział OZE — miesięcznie</h2>
+        <p class="muted">Produkcja prądu według paliw, udział OZE i wymiana z zagranicą — oficjalna statystyka (Eurostat)</p>
       </div>
       <div id="mix-body"><p class="state">Ładowanie…</p></div>
     </section>
 
-    <section class="card" id="bills" aria-labelledby="bills-h">
+    <section class="card" id="elec-y" data-view="r" aria-labelledby="elec-y-h">
+      <div class="card-head">
+        <h2 id="elec-y-h">Bilans energii elektrycznej — rocznie</h2>
+        <p class="muted">Produkcja według paliw i zużycie według odbiorców, 1990 – ostatni pełny rok (Eurostat)</p>
+      </div>
+      <div id="elec-y-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="ren-y" data-view="r" aria-labelledby="ren-y-h">
+      <div class="card-head">
+        <h2 id="ren-y-h">Udział OZE — oficjalne wskaźniki roczne</h2>
+        <p class="muted">Metodyka dyrektywy OZE: prąd, ciepło, transport i cała energia, na tle UE</p>
+      </div>
+      <div id="ren-y-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="bills" data-view="r" aria-labelledby="bills-h">
       <div class="card-head">
         <h2 id="bills-h">Ile płacimy za prąd</h2>
         <p class="muted">Ceny dla gospodarstw domowych i firm, składniki ceny, porównanie z UE (Eurostat)</p>

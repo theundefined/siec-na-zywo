@@ -25,7 +25,7 @@
         <nav class="tabs" aria-label="Rodzaj danych"><a href="./">Prąd</a><a href="gaz.html" aria-current="page">Gaz</a></nav>
       </div>
       <nav class="datenav" aria-label="Zakres">
-        <div id="range"></div>
+        <div id="range" data-view="d"></div>
         <button id="install" type="button" class="ghost install" hidden>Zainstaluj aplikację</button>
         <button id="theme" type="button" class="ghost">Motyw: auto</button>
       </nav>
@@ -33,13 +33,14 @@
   </header>
 
   <main class="wrap">
-    <p id="range-label" class="date-label">Ładowanie…</p>
+    <nav id="views" class="views" role="tablist" aria-label="Rodzaj danych"></nav>
+    <p id="range-label" class="date-label" data-view="d">Ładowanie…</p>
     <nav class="toc" aria-label="Sekcje">
-      <a href="#g-day">Ostatnia doba</a><a href="#g-price">Ceny gazu</a><a href="#g-supply">Skąd gaz</a><a href="#g-use">Dokąd gaz</a><a href="#g-uses">Na co idzie gaz</a><a href="#g-dep">Uzależnienie od importu</a><a href="#g-borders">Wymiana z sąsiadami</a><a href="#g-store">Magazyny</a><a href="#g-points">Wykorzystanie punktów</a><a href="#g-power">Gaz w elektroenergetyce</a>
+      <a href="#g-day" data-view="d">Ostatnia doba</a><a href="#g-price" data-view="d">Ceny gazu</a><a href="#g-supply" data-view="d">Skąd gaz</a><a href="#g-use" data-view="d">Dokąd gaz</a><a href="#g-borders" data-view="d">Wymiana z sąsiadami</a><a href="#g-store" data-view="d">Magazyny</a><a href="#g-points" data-view="d">Wykorzystanie punktów</a><a href="#g-power" data-view="d">Gaz w elektroenergetyce</a><a href="#g-uses-m" data-view="m">Zużycie miesięcznie</a><a href="#g-dep-m" data-view="m">Import miesięcznie</a><a href="#g-uses-y" data-view="r">Na co idzie gaz</a><a href="#g-dep-y" data-view="r">Uzależnienie od importu</a>
     </nav>
-    <p class="chart-hint">Wykresy: przeciągnij myszą, by powiększyć zakres · Ctrl + kółko przybliża/oddala · dwuklik przywraca pełny zakres · kliknięcie w legendzie ukrywa/pokazuje serię (dwuklik — tylko ta seria). Powiększenie jest wspólne dla wszystkich wykresów.</p>
+    <p class="chart-hint" data-view="d m r">Wykresy: przeciągnij myszą, by powiększyć zakres · Ctrl + kółko przybliża/oddala · dwuklik przywraca pełny zakres · kliknięcie w legendzie ukrywa/pokazuje serię (dwuklik — tylko ta seria). Powiększenie jest wspólne dla wszystkich wykresów.</p>
 
-    <section class="card" id="g-day" aria-labelledby="g-day-h">
+    <section class="card" id="g-day" data-view="d" aria-labelledby="g-day-h">
       <div class="card-head">
         <h2 id="g-day-h">Ostatnia doba gazowa</h2>
         <p class="muted">Bilans systemu przesyłowego za ostatnią opublikowaną dobę (6:00–6:00)</p>
@@ -47,7 +48,7 @@
       <div id="g-day-body"><p class="state">Ładowanie…</p></div>
     </section>
 
-    <section class="card" id="g-price" aria-labelledby="g-price-h">
+    <section class="card" id="g-price" data-view="d" aria-labelledby="g-price-h">
       <div class="card-head">
         <h2 id="g-price-h">Ceny gazu na giełdzie (TGEgasDA)</h2>
         <p class="muted">Rynek Dnia Następnego gazu TGE, zł/MWh</p>
@@ -55,7 +56,7 @@
       <div id="g-price-body"><p class="state">Ładowanie…</p></div>
     </section>
 
-    <section class="card" id="g-supply" aria-labelledby="g-supply-h">
+    <section class="card" id="g-supply" data-view="d" aria-labelledby="g-supply-h">
       <div class="card-head">
         <h2 id="g-supply-h">Skąd pochodzi gaz</h2>
         <p class="muted">Dostawy do systemu przesyłowego według źródeł, GWh na dobę</p>
@@ -63,7 +64,7 @@
       <div id="g-supply-body"><p class="state">Ładowanie…</p></div>
     </section>
 
-    <section class="card" id="g-use" aria-labelledby="g-use-h">
+    <section class="card" id="g-use" data-view="d" aria-labelledby="g-use-h">
       <div class="card-head">
         <h2 id="g-use-h">Dokąd trafia gaz</h2>
         <p class="muted">Odbiór z systemu przesyłowego, GWh na dobę</p>
@@ -71,23 +72,9 @@
       <div id="g-use-body"><p class="state">Ładowanie…</p></div>
     </section>
 
-    <section class="card" id="g-uses" aria-labelledby="g-uses-h">
-      <div class="card-head">
-        <h2 id="g-uses-h">Na co idzie gaz</h2>
-        <p class="muted">Oficjalne bilanse: miesięcznie energetyka zawodowa i reszta, rocznie pełny podział na odbiorców</p>
-      </div>
-      <div id="g-uses-body"><p class="state">Ładowanie…</p></div>
-    </section>
 
-    <section class="card" id="g-dep" aria-labelledby="g-dep-h">
-      <div class="card-head">
-        <h2 id="g-dep-h">Uzależnienie od importu</h2>
-        <p class="muted">Gaz miesięcznie z pomiarów, rocznie oficjalny wskaźnik dla wszystkich paliw i porównanie z UE</p>
-      </div>
-      <div id="g-dep-body"><p class="state">Ładowanie…</p></div>
-    </section>
 
-    <section class="card" id="g-borders" aria-labelledby="g-borders-h">
+    <section class="card" id="g-borders" data-view="d" aria-labelledby="g-borders-h">
       <div class="card-head">
         <h2 id="g-borders-h">Wymiana z sąsiadami</h2>
         <p class="muted">Import i eksport gazu na każdej granicy, GWh na dobę</p>
@@ -95,7 +82,7 @@
       <div id="g-borders-body"><p class="state">Ładowanie…</p></div>
     </section>
 
-    <section class="card" id="g-store" aria-labelledby="g-store-h">
+    <section class="card" id="g-store" data-view="d" aria-labelledby="g-store-h">
       <div class="card-head">
         <h2 id="g-store-h">Magazyny gazu</h2>
         <p class="muted">Zatłaczanie i odbiór z podziemnych magazynów, GWh na dobę</p>
@@ -103,7 +90,7 @@
       <div id="g-store-body"><p class="state">Ładowanie…</p></div>
     </section>
 
-    <section class="card" id="g-points" aria-labelledby="g-points-h">
+    <section class="card" id="g-points" data-view="d" aria-labelledby="g-points-h">
       <div class="card-head">
         <h2 id="g-points-h">Wykorzystanie punktów systemu</h2>
         <p class="muted">Przepływ jako procent mocy technicznej połączeń z sąsiadami, terminalu LNG i magazynów</p>
@@ -111,12 +98,44 @@
       <div id="g-points-body"><p class="state">Ładowanie…</p></div>
     </section>
 
-    <section class="card" id="g-power" aria-labelledby="g-power-h">
+    <section class="card" id="g-power" data-view="d" aria-labelledby="g-power-h">
       <div class="card-head">
         <h2 id="g-power-h">Gaz w produkcji energii elektrycznej</h2>
         <p class="muted">Energia elektryczna z elektrowni i elektrociepłowni gazowych (PSE), GWh na dobę</p>
       </div>
       <div id="g-power-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-uses-m" data-view="m" aria-labelledby="g-uses-m-h">
+      <div class="card-head">
+        <h2 id="g-uses-m-h">Zużycie gazu — miesięcznie</h2>
+        <p class="muted">Zużycie krajowe i gaz spalony w energetyce zawodowej, od 2013 r. (Eurostat)</p>
+      </div>
+      <div id="g-uses-m-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-dep-m" data-view="m" aria-labelledby="g-dep-m-h">
+      <div class="card-head">
+        <h2 id="g-dep-m-h">Udział importu w dostawach gazu — miesięcznie</h2>
+        <p class="muted">Import netto wobec wydobycia krajowego, z pomiarów GAZ-SYSTEM (ENTSOG)</p>
+      </div>
+      <div id="g-dep-m-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-uses-y" data-view="r" aria-labelledby="g-uses-y-h">
+      <div class="card-head">
+        <h2 id="g-uses-y-h">Na co idzie gaz — rocznie</h2>
+        <p class="muted">Pełny bilans: odbiorcy, energetyka, gaz w domach; wybór roku od 1990 (Eurostat)</p>
+      </div>
+      <div id="g-uses-y-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="g-dep-y" data-view="r" aria-labelledby="g-dep-y-h">
+      <div class="card-head">
+        <h2 id="g-dep-y-h">Uzależnienie od importu — rocznie</h2>
+        <p class="muted">Oficjalny wskaźnik według paliw i porównanie z krajami UE (Eurostat)</p>
+      </div>
+      <div id="g-dep-y-body"><p class="state">Ładowanie…</p></div>
     </section>
 
   </main>

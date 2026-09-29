@@ -1,6 +1,6 @@
 // Sekcje strony „Prąd” oparte na statystyce Eurostatu (miesięcznej, półrocznej i rocznej) — niezależne od wybranego dnia.
 import { tipRows, fmt0, fmt2 } from './charts.js';
-import { $, eurostat, EU_NAMES, MONTHS, esc, errorBox, table, tilesHtml, drawChart } from './common.js';
+import { $, eurostat, EU_NAMES, MONTHS, esc, errorBox, table, tilesHtml, drawChart, rangeSeg, yearSelect } from './common.js';
 
 const twh = (v) => (v == null ? '—' : `${fmt2.format(v)} TWh`);
 const pc = (v) => (v == null ? '—' : `${fmt0.format(v)}%`);
@@ -25,10 +25,9 @@ const REN = [['REN_ELC', 'Prąd', 'var(--s1)'], ['REN', 'Cała energia (cel UE)'
 export async function renderMix() {
   const box = $('#mix-body');
   try {
-    const [pem, em, ren] = await Promise.all([
+    const [pem, em] = await Promise.all([
       eurostat('nrg_cb_pem', { geo: 'PL', unit: 'GWH', sinceTimePeriod: '2016-01' }),
       eurostat('nrg_cb_em', { geo: 'PL', siec: 'E7000', unit: 'GWH', sinceTimePeriod: '2016-01' }),
-      eurostat('nrg_ind_ren', { geo: ['PL', 'EU27_2020'], sinceTimePeriod: '2004' }),
     ]);
     // Pomijamy miesiące z niepełnym zestawem paliw (w 2016 r. Eurostat ma dla Polski tylko energię wodną).
     const months = pem.times.filter((t) => pem.get({ siec: 'TOTAL', time: t }) != null && pem.get({ siec: 'C0000', time: t }) > 0);
@@ -42,28 +41,24 @@ export async function renderMix() {
     const net = imp.map((v, i) => (v == null || exp[i] == null ? null : (v - exp[i]) / 1000));
     const aim = months.map((t) => em.get({ nrg_bal: 'AIM', time: t }));
     const last = n - 1;
-    const yearOf = (k) => months.filter((t) => t.startsWith(k));
     const lastYear = months[last].slice(0, 4);
     const prevFull = String(+lastYear - 1);
-    const yShare = (y) => { const ms = yearOf(y); return ms.length === 12 ? (ms.reduce((a, t) => a + g('RA000', t), 0) / ms.reduce((a, t) => a + g('TOTAL', t), 0)) * 100 : null; };
-    const renYears = ren.times.filter((t) => ren.get({ geo: 'PL', nrg_bal: 'REN', time: t }) != null);
-    const RY = renYears[renYears.length - 1];
-    const rv = (geo, c, t = RY) => ren.get({ geo, nrg_bal: c, time: t });
+    const yShare = (y) => { const ms = months.filter((t) => t.startsWith(y)); return ms.length === 12 ? (ms.reduce((a, t) => a + g('RA000', t), 0) / ms.reduce((a, t) => a + g('TOTAL', t), 0)) * 100 : null; };
     const max12 = renShare.slice(-12).reduce((a, v, i, arr) => (v > arr[a] ? i : a), 0) + n - 12;
+    const seg = rangeSeg('mix', n, 'mix');
     box.innerHTML = tilesHtml([
       { l: `Produkcja prądu — ${mLabel(months[last])}`, v: twh(total[last]), d: `OZE: ${pc(renShare[last])}, węgiel: ${pc((series[0].values[last] / total[last]) * 100)}` },
       { l: 'Udział OZE w produkcji prądu', v: `${pc(yShare(prevFull))} w ${prevFull}`, d: `${pc(yShare(String(+prevFull - 1)))} w ${+prevFull - 1}; rekordowy miesiąc w ostatnim roku: ${mLabel(months[max12])} (${pc(renShare[max12])})` },
       { l: `Import netto prądu — ${mLabel(months[last])}`, v: net[last] == null ? '—' : `${net[last] >= 0 ? '' : '−'}${twh(Math.abs(net[last]))}`, d: net[last] == null ? '' : net[last] >= 0 ? `import ${pc((net[last] / (aim[last] / 1000)) * 100)} zużycia` : 'Polska była eksporterem netto' },
-      { l: `Udział OZE w całej energii (${RY})`, v: pc(rv('PL', 'REN')), d: `UE-27: ${pc(rv('EU27_2020', 'REN'))}` },
-    ]) +
+    ]) + seg.html +
       `<h3 class="sub-h">Produkcja prądu według paliw, ${mLabel(months[0])} – ${mLabel(months[last])}</h3><div class="chart" id="mix-chart"></div>` +
-      '<h3 class="sub-h">Udział OZE w produkcji prądu, miesięcznie</h3><div class="chart" id="mix-ren"></div>' +
-      '<h3 class="sub-h">Import netto prądu, miesięcznie</h3><div class="chart" id="mix-net"></div>' +
-      `<h3 class="sub-h">Oficjalny udział OZE (metodyka dyrektywy OZE), rocznie ${renYears[0]}–${RY}</h3><div class="chart" id="mix-renY"></div>` +
+      '<h3 class="sub-h">Udział OZE w produkcji prądu</h3><div class="chart" id="mix-ren"></div>' +
+      '<h3 class="sub-h">Import netto prądu</h3><div class="chart" id="mix-net"></div>' +
       table(['Miesiąc', ...MIX.map((x) => `${x.name} [TWh]`), 'Razem [TWh]', 'Udział OZE', 'Import netto [TWh]'], months.map((t, i) => [mLabel(t), ...series.map((s) => fmt2.format(s.values[i])), fmt2.format(total[i]), pc(renShare[i]), net[i] == null ? '—' : fmt2.format(net[i])]).reverse()) +
-      `<p class="note">Produkcja netto energii elektrycznej według paliw (Eurostat <a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_cb_pem/default/table" rel="noopener">nrg_cb_pem</a>), import i eksport (<a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_cb_em/default/table" rel="noopener">nrg_cb_em</a>) — dane miesięczne z ok. 3-miesięcznym opóźnieniem. Udział OZE miesięcznie = produkcja z OZE ÷ produkcja ogółem (bez przeliczeń; elektrownie szczytowo-pompowe nie są OZE). Oficjalne wskaźniki (<a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_ind_ren/default/table" rel="noopener">nrg_ind_ren</a>) liczone są od zużycia, z normalizacją produkcji wiatrowej i wodnej — dlatego różnią się od prostego udziału w produkcji. Statystyka nie rozdziela węgla kamiennego i brunatnego w danych miesięcznych.</p>`;
+      `<p class="note">Produkcja netto energii elektrycznej według paliw (Eurostat <a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_cb_pem/default/table" rel="noopener">nrg_cb_pem</a>), import i eksport (<a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_cb_em/default/table" rel="noopener">nrg_cb_em</a>) — dane miesięczne z ok. 3-miesięcznym opóźnieniem. Udział OZE = produkcja z OZE ÷ produkcja ogółem (elektrownie szczytowo-pompowe nie są OZE); oficjalne wskaźniki roczne są w zakładce „Roczne”. W danych miesięcznych węgiel kamienny i brunatny są łącznie.</p>`;
+    seg.bind(box);
     const ticks = yearTicks(months);
-    const tipMonth = (i, on) => tipRows(mLabel(months[i]), [...series.map((s) => s).reverse().filter((s) => on(s.name) && s.values[i] > 0.0005).map((s) => ({ name: s.name, color: s.color, value: `${twh(s.values[i])} · ${pc((s.values[i] / total[i]) * 100)}` })), { name: 'Razem', value: twh(total[i]) }]);
+    const tipMonth = (i, on) => tipRows(mLabel(months[i]), [...series.slice().reverse().filter((s) => on(s.name) && s.values[i] > 0.0005).map((s) => ({ name: s.name, color: s.color, value: `${twh(s.values[i])} · ${pc((s.values[i] / total[i]) * 100)}` })), { name: 'Razem', value: twh(total[i]) }]);
     drawChart('mix', $('#mix-chart'), { n, stacked: true, series, xTicks: ticks, height: 300, minSpan: 6, yFmt: (v) => `${fmt0.format(v)} TWh`, label: 'Miesięczna produkcja prądu w Polsce według paliw, TWh', tooltip: tipMonth }, 'mix');
     drawChart('mix-ren', $('#mix-ren'), {
       n, series: [{ name: 'Udział OZE', color: 'var(--g-wl)', values: renShare }], area: true, xTicks: ticks, height: 200, minSpan: 6, yFmt: (v) => `${fmt0.format(v)}%`,
@@ -76,12 +71,122 @@ export async function renderMix() {
       xTicks: ticks, height: 180, minSpan: 6, yFmt: (v) => fmt2.format(v), label: 'Saldo wymiany prądu z zagranicą, TWh miesięcznie',
       tooltip: (i) => tipRows(mLabel(months[i]), [{ name: 'Import', color: 'var(--imp)', value: twh(imp[i] / 1000) }, { name: 'Eksport', color: 'var(--exp)', value: twh(exp[i] / 1000) }, { name: 'Saldo', value: net[i] == null ? '—' : `${net[i] >= 0 ? '+' : '−'}${twh(Math.abs(net[i]))}` }]),
     }, 'mix');
-    drawChart('mix-renY', $('#mix-renY'), {
+  } catch (e) {
+    box.innerHTML = errorBox(e);
+  }
+}
+
+// ---------- Oficjalny udział OZE (nrg_ind_ren), rocznie ----------
+export async function renderRenYear() {
+  const box = $('#ren-y-body');
+  try {
+    const ren = await eurostat('nrg_ind_ren', { geo: ['PL', 'EU27_2020'], sinceTimePeriod: '2004' });
+    const renYears = ren.times.filter((t) => ren.get({ geo: 'PL', nrg_bal: 'REN', time: t }) != null);
+    const RY = renYears[renYears.length - 1];
+    const rv = (geo, c, t = RY) => ren.get({ geo, nrg_bal: c, time: t });
+    // Wskaźniki bywają publikowane w różnym tempie — każdy kafelek pokazuje swój ostatni dostępny rok.
+    const lastOf = (c) => renYears.filter((t) => rv('PL', c, t) != null).pop();
+    box.innerHTML = tilesHtml(REN.map(([c, name]) => { const t = lastOf(c); return { l: `${name} — ${t}`, v: pc(rv('PL', c, t)), d: `UE-27: ${pc(rv('EU27_2020', c, t))}; ${renYears[0]}: ${pc(rv('PL', c, renYears[0]))}` }; })) +
+      '<div class="chart" id="ren-y-chart"></div>' +
+      table(['Rok', ...REN.flatMap(([, name]) => [`${name} — PL`, 'UE-27'])], renYears.map((t) => [t, ...REN.flatMap(([c]) => [pc(rv('PL', c, t)), pc(rv('EU27_2020', c, t))])]).reverse()) +
+      '<p class="note">Oficjalne wskaźniki (Eurostat <a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_ind_ren/default/table" rel="noopener">nrg_ind_ren</a>) liczone są od zużycia końcowego brutto, z normalizacją produkcji wiatrowej i wodnej — dlatego udział OZE w prądzie różni się od prostego udziału w produkcji z zakładki „Miesięczne”. „Cała energia” to wskaźnik, z którego rozliczany jest cel UE.</p>';
+    drawChart('ren-y', $('#ren-y-chart'), {
       n: renYears.length, markers: true, series: REN.map(([c, name, col]) => ({ name, color: col, values: renYears.map((t) => rv('PL', c, t)) })),
-      xTicks: renYears.map((t, i) => ({ i, label: t, at: 'center' })).filter((x) => +x.label % 4 === 0 || x.i === renYears.length - 1), height: 240, minSpan: 4, yFmt: (v) => `${fmt0.format(v)}%`,
+      xTicks: renYears.map((t, i) => ({ i, label: t, at: 'center' })).filter((x) => +x.label % 4 === 0 || x.i === renYears.length - 1), height: 260, minSpan: 4, yFmt: (v) => `${fmt0.format(v)}%`,
       label: 'Oficjalny udział OZE w Polsce według obszaru, rocznie',
       tooltip: (i, on) => tipRows(renYears[i], REN.filter(([, name]) => on(name)).map(([c, name, col]) => ({ name, color: col, value: `${pc(rv('PL', c, renYears[i]))} (UE-27: ${pc(rv('EU27_2020', c, renYears[i]))})` }))),
-    }, 'renY');
+    }, 'ren-y');
+  } catch (e) {
+    box.innerHTML = errorBox(e);
+  }
+}
+
+// ---------- Roczny bilans energii elektrycznej (nrg_bal_peh — produkcja wg paliw, nrg_bal_c — zużycie) ----------
+// Produkcja brutto; grupa „Inne” to reszta do sumy (gazy przemysłowe, olej, odpady nieodnawialne, magazyny energii…).
+const EL_PROD = [
+  { name: 'Węgiel kamienny', color: 'var(--g-wk)', f: (v) => v('C0000X0350-0370') - v('C0220') },
+  { name: 'Węgiel brunatny', color: 'var(--g-wb)', f: (v) => v('C0220') },
+  { name: 'Gaz ziemny', color: 'var(--g-gaz)', f: (v) => v('G3000') },
+  { name: 'Inne (olej, gazy przemysłowe, odpady)', color: 'var(--ink-2)', f: null },
+  { name: 'Woda (z elektrowniami szczytowo-pompowymi)', color: 'var(--g-woda)', f: (v) => v('RA100') + v('RA130') },
+  { name: 'Wiatr', color: 'var(--g-wl)', f: (v) => v('RA300') },
+  { name: 'Fotowoltaika', color: 'var(--g-pv)', f: (v) => v('RA420') + v('RA410') },
+  { name: 'Biomasa i biogaz', color: 'var(--g-bio)', f: (v) => v('BIOE') },
+];
+// Zużycie: sumuje się do produkcji + import − eksport. Kolory: paleta sprawdzona walidatorem (kolejność warstw).
+const EL_USE = [
+  { name: 'Gospodarstwa domowe', color: 'var(--s6)', codes: ['FC_OTH_HH_E'] },
+  { name: 'Handel, usługi i budynki publiczne', color: 'var(--s1)', codes: ['FC_OTH_CP_E'] },
+  { name: 'Przemysł', color: 'var(--s4)', codes: ['FC_IND_E'] },
+  { name: 'Transport, rolnictwo i inne', color: 'var(--s5)', codes: ['FC_TRA_E', 'FC_OTH_AF_E', 'FC_OTH_FISH_E', 'FC_OTH_NSP_E'] },
+  { name: 'Sektor energii (elektrownie, kopalnie, rafinerie)', color: 'var(--s7)', codes: ['NRG_E'] },
+  { name: 'Straty w sieciach i magazynowanie', color: 'var(--s2)', codes: ['DL', 'TI_E'] },
+];
+
+let elSel = null;
+export async function renderElecYear() {
+  const box = $('#elec-y-body');
+  try {
+    const [peh, bal] = await Promise.all([
+      eurostat('nrg_bal_peh', { geo: 'PL', unit: 'GWH', nrg_bal: 'GEP', sinceTimePeriod: '1990' }),
+      eurostat('nrg_bal_c', { geo: 'PL', siec: 'E7000', unit: 'GWH', sinceTimePeriod: '1990' }),
+    ]);
+    const years = peh.times.filter((t) => peh.get({ siec: 'TOTAL', time: t }) != null && bal.get({ nrg_bal: 'FC_E', time: t }) != null);
+    const pv = (t) => (c) => (peh.get({ siec: c, time: t }) ?? 0) / 1000;
+    const bv = (c, t) => (bal.get({ nrg_bal: c, time: t }) ?? 0) / 1000;
+    const prod = (t) => {
+      const v = pv(t);
+      const tot = v('TOTAL');
+      const vals = EL_PROD.map((x) => (x.f ? x.f(v) : 0));
+      vals[3] = tot - vals.reduce((a, x) => a + x, 0);
+      return { tot, vals };
+    };
+    const use = (t) => EL_USE.map((x) => x.codes.reduce((a, c) => a + bv(c, t), 0));
+    const n = years.length;
+    const P = years.map(prod);
+    const U = years.map(use);
+    const draw = () => {
+      const Y = elSel && years.includes(elSel) ? elSel : years[n - 1];
+      const i = years.indexOf(Y);
+      const { tot, vals } = P[i];
+      const u = U[i];
+      const uTot = u.reduce((a, x) => a + x, 0);
+      const imp = bv('IMP', Y);
+      const exp = bv('EXP', Y);
+      const ren = vals[4] - pv(Y)('RA130') + vals[5] + vals[6] + vals[7];
+      const bars = (list, values, total) => {
+        const mx = Math.max(...values);
+        return `<div class="util">${list.map((x, k) => ({ x, v: values[k] })).sort((a, b) => b.v - a.v).map(({ x, v }) => `<div class="urow"><div class="uname"><i class="sw" style="background:${x.color}"></i>${x.name}</div>
+          <div class="utrack"><span class="ubar" style="width:${mx > 0 ? (Math.max(0, v) / mx) * 100 : 0}%;background:${x.color}"></span></div>
+          <div class="uval"><b>${twh(v)}</b> <span class="muted">${pc((v / total) * 100)}</span></div></div>`).join('')}</div>`;
+      };
+      box.innerHTML = yearSelect('elec-y-year', years, Y) +
+        tilesHtml([
+          { l: `Produkcja brutto ${Y}`, v: twh(tot), d: `OZE: ${pc((ren / tot) * 100)}, węgiel: ${pc(((vals[0] + vals[1]) / tot) * 100)}` },
+          { l: 'Import − eksport', v: `${imp - exp >= 0 ? '+' : '−'}${twh(Math.abs(imp - exp))}`, d: `import ${twh(imp)}, eksport ${twh(exp)}` },
+          { l: 'Zużycie końcowe', v: twh(bv('FC_E', Y)), d: `gospodarstwa domowe ${twh(u[0])}` },
+        ]) +
+        `<h3 class="sub-h">Produkcja według paliw — ${Y}</h3>${bars(EL_PROD, vals, tot)}` +
+        `<h3 class="sub-h">Na co zużyto prąd — ${Y}</h3>${bars(EL_USE, u, uTot)}` +
+        `<h3 class="sub-h">Produkcja według paliw, ${years[0]}–${years[n - 1]}</h3><div class="chart" id="elec-y-prod"></div>` +
+        `<h3 class="sub-h">Zużycie według odbiorców, ${years[0]}–${years[n - 1]}</h3><div class="chart" id="elec-y-use"></div>` +
+        table(['Rok', ...EL_PROD.map((x) => `${x.name} [TWh]`), 'Produkcja [TWh]', ...EL_USE.map((x) => `${x.name} [TWh]`), 'Import [TWh]', 'Eksport [TWh]'], years.map((t, k) => [t, ...P[k].vals.map((v) => fmt2.format(v)), fmt2.format(P[k].tot), ...U[k].map((v) => fmt2.format(v)), fmt2.format(bv('IMP', t)), fmt2.format(bv('EXP', t))]).reverse()) +
+        '<p class="note">Roczne bilanse Eurostatu: produkcja brutto według paliw (<a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_bal_peh/default/table" rel="noopener">nrg_bal_peh</a>) i zużycie (<a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_bal_c/default/table" rel="noopener">nrg_bal_c</a>), publikowane z opóźnieniem ponad roku. Produkcja brutto obejmuje zużycie własne elektrowni (w zużyciu: „sektor energii”). Zużycie sumuje się do produkcji + import − eksport. „Magazynowanie” to pompowanie w elektrowniach szczytowo-pompowych i ładowanie magazynów bateryjnych.</p>';
+      $('#elec-y-year').addEventListener('change', (e) => { elSel = e.target.value; draw(); });
+      const ticks = years.map((t, k) => ({ i: k, label: t, at: 'center' })).filter((x) => +x.label % 5 === 0);
+      const hi = (k) => (years[k] === Y ? ' (wybrany rok)' : '');
+      drawChart('elec-y-prod', $('#elec-y-prod'), {
+        n, stacked: true, series: EL_PROD.map((x, k) => ({ name: x.name, color: x.color, values: P.map((p) => p.vals[k]) })), xTicks: ticks, height: 280, minSpan: 5,
+        yFmt: (v) => `${fmt0.format(v)} TWh`, label: 'Roczna produkcja prądu w Polsce według paliw, TWh',
+        tooltip: (k, on) => tipRows(years[k] + hi(k), [...EL_PROD.map((x, j) => [x, j]).reverse().filter(([x, j]) => on(x.name) && P[k].vals[j] > 0.005).map(([x, j]) => ({ name: x.name, color: x.color, value: `${twh(P[k].vals[j])} · ${pc((P[k].vals[j] / P[k].tot) * 100)}` })), { name: 'Razem', value: twh(P[k].tot) }]),
+      }, 'elec-y');
+      drawChart('elec-y-use', $('#elec-y-use'), {
+        n, stacked: true, series: EL_USE.map((x, k) => ({ name: x.name, color: x.color, values: U.map((u2) => u2[k]) })), xTicks: ticks, height: 280, minSpan: 5,
+        yFmt: (v) => `${fmt0.format(v)} TWh`, label: 'Roczne zużycie prądu w Polsce według odbiorców, TWh',
+        tooltip: (k, on) => tipRows(years[k] + hi(k), [...EL_USE.map((x, j) => [x, j]).reverse().filter(([x]) => on(x.name)).map(([x, j]) => ({ name: x.name, color: x.color, value: twh(U[k][j]) })), { name: 'Razem', value: twh(U[k].reduce((a, x) => a + x, 0)) }]),
+      }, 'elec-y');
+    };
+    draw();
   } catch (e) {
     box.innerHTML = errorBox(e);
   }

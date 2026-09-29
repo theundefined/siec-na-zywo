@@ -196,3 +196,63 @@ export async function eurostat(dataset, params) {
 
 // Kraje UE po polsku (kody Eurostatu).
 export const EU_NAMES = { EU27_2020: 'UE-27', BE: 'Belgia', BG: 'Bułgaria', CZ: 'Czechy', DK: 'Dania', DE: 'Niemcy', EE: 'Estonia', IE: 'Irlandia', EL: 'Grecja', ES: 'Hiszpania', FR: 'Francja', HR: 'Chorwacja', IT: 'Włochy', CY: 'Cypr', LV: 'Łotwa', LT: 'Litwa', LU: 'Luksemburg', HU: 'Węgry', MT: 'Malta', NL: 'Holandia', AT: 'Austria', PL: 'Polska', PT: 'Portugalia', RO: 'Rumunia', SI: 'Słowenia', SK: 'Słowacja', FI: 'Finlandia', SE: 'Szwecja' };
+
+// ---------- Podzakładki: dane dzienne / miesięczne / roczne ----------
+// Sekcje i linki spisu treści mają data-view="d|m|r"; zakładka w parametrze ?v= (hash zajmują kotwice sekcji).
+// onShow[v] wywoływane przy pierwszym otwarciu zakładki (dane ładowane dopiero wtedy).
+export const VIEWS = { d: 'Dzienne', m: 'Miesięczne', r: 'Roczne' };
+export function initTabs(onShow) {
+  const nav = $('#views');
+  let v = new URLSearchParams(location.search).get('v');
+  if (!VIEWS[v]) v = 'd';
+  const shown = new Set();
+  nav.innerHTML = Object.entries(VIEWS).map(([k, l]) => `<button type="button" role="tab" data-v="${k}">${l}</button>`).join('');
+  const show = (nv) => {
+    v = nv;
+    nav.querySelectorAll('button').forEach((b) => { const on = b.dataset.v === v; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
+    document.querySelectorAll('[data-view]').forEach((el) => { el.hidden = !el.dataset.view.split(' ').includes(v); });
+    const url = new URL(location.href);
+    if (v === 'd') url.searchParams.delete('v');
+    else url.searchParams.set('v', v);
+    history.replaceState(null, '', url);
+    if (!shown.has(v)) { shown.add(v); onShow[v]?.(); }
+    // Wykresy narysowane w ukrytej zakładce mają złą szerokość — przerysowujemy po pokazaniu.
+    requestAnimationFrame(() => redraws.forEach((d) => d()));
+  };
+  nav.addEventListener('click', (e) => { const b = e.target.closest('button[data-v]'); if (b && b.dataset.v !== v) show(b.dataset.v); });
+  show(v);
+  return () => v;
+}
+
+// Usuwa przerysowania wykresów z podanych grup (np. przy zmianie dnia), zostawiając pozostałe zakładki.
+export function clearGroups(...groups) {
+  for (const [k, d] of redraws) if (groups.includes(d.group)) redraws.delete(k);
+  groups.forEach((g) => views.delete(g));
+}
+
+// Przełącznik zakresu dla wykresów miesięcznych: ostatnie N miesięcy albo całość (ustawia wspólny widok grupy).
+export function rangeSeg(group, n, key) {
+  const opts = [[24, '2 lata'], [60, '5 lat'], [0, 'całość']];
+  let sel = 24;
+  try { sel = +(localStorage.getItem(`range-${key}`) ?? 24); } catch { /* brak localStorage */ }
+  const apply = (m) => {
+    sel = m;
+    views.set(group, m && m < n ? [n - m, n] : null);
+    try { localStorage.setItem(`range-${key}`, m); } catch { /* j.w. */ }
+  };
+  apply(sel);
+  const html = `<div class="seg" role="group" aria-label="Zakres" data-range="${key}">${opts.map(([m, l]) => `<button type="button" data-m="${m}" class="${m === sel ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const bind = (box) => box.querySelector(`[data-range="${key}"]`)?.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-m]');
+    if (!b) return;
+    apply(+b.dataset.m);
+    b.parentElement.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    redraws.forEach((d) => d.group === group && d());
+  });
+  return { html, bind };
+}
+
+// Wybór roku (select); zwraca HTML i funkcję podpinającą zdarzenie.
+export function yearSelect(id, years, sel) {
+  return `<label class="year-sel">Rok: <select id="${id}">${years.slice().reverse().map((y) => `<option value="${y}"${y === sel ? ' selected' : ''}>${y}</option>`).join('')}</select></label>`;
+}

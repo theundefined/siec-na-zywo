@@ -149,3 +149,15 @@ wysyła najwyżej dwa naraz i ponawia nieudane.
 
 Miesięcznego wydobycia gazu (`IPRD` w `nrg_cb_gasm`) dla Polski brak od 09.2023 — miesięczny udział importu liczymy z ENTSOG.
 Ceny gazu dla gospodarstw domowych (`nrg_pc_202`) dla Polski kończą się na 2023-S2.
+
+### Podzakładki Dzienne / Miesięczne / Roczne
+- Sekcje i linki spisu mają `data-view="d|m|r"`; zakładka w `?v=m|r` (hash zajmują kotwice sekcji). `initTabs()` w `common.js`.
+- Zakładki miesięczna i roczna ładują dane przy pierwszym otwarciu (mniej zapytań do Eurostatu); po przełączeniu wykresy są
+  przerysowywane (w ukrytym kontenerze miałyby złą szerokość). Zmiana dnia / zakresu czyści tylko swoje grupy wykresów (`clearGroups`).
+- Wykresy miesięczne mają przełącznik 2 lata / 5 lat / całość (`rangeSeg`, zapamiętywany w `localStorage`).
+- Roczne: wybór roku. Bilans gazu 1990–2024 (`nrg_bal_c`, `G3000`) — grupy + `STATDIFF` sumują się dokładnie do `GIC`
+  we wszystkich latach (inne przetwarzanie = `TI_E − TI_EHG_E`, bo przed 1997 r. `TI_NSP_E` jest puste, a są np. gazownie `TI_GW_E`).
+  Gaz w domach wg zastosowania od 2010. Prąd: produkcja brutto wg paliw (`nrg_bal_peh`, `GEP`; węgiel kamienny =
+  `C0000X0350-0370 − C0220`, „Inne” = reszta do `TOTAL`) i zużycie (`nrg_bal_c`, `E7000`: FC + `NRG_E` + `DL` + `TI_E`
+  = produkcja + import − eksport).
+- `nrg_ind_ren`: wskaźniki `REN_HEAT_CL` i `REN_TRA` bywają publikowane rok później niż `REN`/`REN_ELC`.
