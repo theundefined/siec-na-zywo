@@ -132,3 +132,20 @@ Endpoint `gas_price_rtt` (kontrakty terminowe) zwraca obecnie pustą listę.
 - Suma miesięcy za 2024 (219,6 TWh GCV) vs bilans roczny (197,3 TWh NCV) — różnica to przelicznik GCV/NCV ≈ 1,11.
   `TI_EHG_MAP` miesięcznie (29,3 TWh GCV w 2024) jest niższe niż suma zawodowych pozycji rocznych (32,3 TWh NCV) — inna sprawozdawczość.
 - `TI_NRG_FC_IND_NE` = `FC_NE` (agregat) — nie sumować podwójnie.
+
+### Pozostałe zbiory Eurostatu (strona „Prąd”: `stats.js`, strona „Gaz”: sekcje „Na co idzie gaz” i „Uzależnienie od importu”)
+Eurostat odrzuca zbyt wiele równoczesnych zapytań (odpowiedź bez CORS → „Failed to fetch”) — `eurostat()` w `common.js`
+wysyła najwyżej dwa naraz i ponawia nieudane.
+
+| Zbiór | Zawartość | Uwagi |
+|---|---|---|
+| `nrg_cb_pem` | produkcja prądu netto wg paliw, miesięcznie, GWh | dla PL w 2016 tylko woda — pomijamy miesiące bez `C0000`; `RA000` nie obejmuje szczytowo-pompowych; węgiel kamienny i brunatny łącznie |
+| `nrg_cb_em` | import, eksport, `AIM` prądu, miesięcznie | ok. 3 miesiące opóźnienia |
+| `nrg_ind_ren` | oficjalny udział OZE: `REN`, `REN_ELC`, `REN_HEAT_CL`, `REN_TRA` [%] | rocznie |
+| `nrg_ind_id` | uzależnienie od importu wg paliw [%] | rocznie; ujemne = eksporter netto |
+| `nrg_pc_204` / `nrg_pc_205` | ceny prądu dla gospodarstw domowych / firm, półrocznie | `NAC` = zł; UE-27 tylko w EUR/PPS — przeliczamy kursem z polskich cen |
+| `nrg_pc_204_c` | składniki ceny (energia, sieć, podatki i opłaty), rocznie | pasmo DC (2,5–5 MWh) |
+| `nrg_d_hhq` | zużycie w gospodarstwach domowych wg zastosowania | prąd w `GWH`, gaz tylko w `TJ`/`TJ_GCV` |
+
+Miesięcznego wydobycia gazu (`IPRD` w `nrg_cb_gasm`) dla Polski brak od 09.2023 — miesięczny udział importu liczymy z ENTSOG.
+Ceny gazu dla gospodarstw domowych (`nrg_pc_202`) dla Polski kończą się na 2023-S2.

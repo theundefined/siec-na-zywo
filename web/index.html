@@ -39,7 +39,7 @@
     <div id="alert" class="alert" role="status" hidden></div>
     <p id="date-label" class="date-label"></p>
     <nav class="toc" aria-label="Sekcje">
-      <a href="#kompas">Kompas</a><a href="#now">Bilans teraz</a><a href="#load">Zapotrzebowanie</a><a href="#bal">Produkcja vs zapotrz.</a><a href="#gen">Struktura generacji</a><a href="#util">Wykorzystanie mocy</a><a href="#rce">RCE</a><a href="#prices">Ceny RDN i RB</a><a href="#curt">Redukcje OZE</a><a href="#units">Elektrownie</a><a href="#plan">Prognoza 7 dni</a><a href="#lolp">LOLP</a><a href="#rcem">RCEm</a><a href="#co2">CO₂</a>
+      <a href="#kompas">Kompas</a><a href="#now">Bilans teraz</a><a href="#load">Zapotrzebowanie</a><a href="#bal">Produkcja vs zapotrz.</a><a href="#gen">Struktura generacji</a><a href="#util">Wykorzystanie mocy</a><a href="#rce">RCE</a><a href="#prices">Ceny RDN i RB</a><a href="#curt">Redukcje OZE</a><a href="#units">Elektrownie</a><a href="#plan">Prognoza 7 dni</a><a href="#lolp">LOLP</a><a href="#rcem">RCEm</a><a href="#co2">CO₂</a><a href="#mix">Miks miesięcznie i OZE</a><a href="#bills">Ceny dla odbiorców</a>
     </nav>
     <p class="chart-hint">Wykresy: przeciągnij myszą, by powiększyć zakres · Ctrl + kółko przybliża/oddala · dwuklik przywraca pełny zakres · kliknięcie w legendzie ukrywa/pokazuje serię (dwuklik — tylko ta seria). Powiększenie jest wspólne dla wykresów doby.</p>
 
@@ -154,6 +154,22 @@
       <div id="co2-body"></div>
     </section>
 
+    <section class="card" id="mix" aria-labelledby="mix-h">
+      <div class="card-head">
+        <h2 id="mix-h">Miks energetyczny miesięcznie i udział OZE</h2>
+        <p class="muted">Produkcja prądu według paliw, udział OZE i wymiana z zagranicą — oficjalna statystyka (Eurostat), niezależnie od wybranego dnia</p>
+      </div>
+      <div id="mix-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
+    <section class="card" id="bills" aria-labelledby="bills-h">
+      <div class="card-head">
+        <h2 id="bills-h">Ile płacimy za prąd</h2>
+        <p class="muted">Ceny dla gospodarstw domowych i firm, składniki ceny, porównanie z UE (Eurostat)</p>
+      </div>
+      <div id="bills-body"><p class="state">Ładowanie…</p></div>
+    </section>
+
   </main>
 
   <div id="install-help" class="install-help" role="dialog" aria-labelledby="install-help-h" hidden>
@@ -164,7 +180,7 @@
 
   <footer class="wrap foot">
     <p>Źródła: <a href="https://raporty.pse.pl" rel="noopener">API raportów PSE</a> (pdgsz, kse-load, his-gen-pal-sire, rce-pln)
-      oraz pliki aplikacji <a href="https://www.energetycznykompas.pl" rel="noopener">Energetyczny Kompas</a> (przesyly.json, RCEm.json, alert.json).
+      oraz pliki aplikacji <a href="https://www.energetycznykompas.pl" rel="noopener">Energetyczny Kompas</a> (przesyly.json, RCEm.json, alert.json) oraz statystyka <a href="https://ec.europa.eu/eurostat" rel="noopener">Eurostatu</a>.
       Strona nieoficjalna, niezwiązana z PSE S.A.</p>
   </footer>
 

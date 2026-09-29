@@ -1,5 +1,5 @@
 import { tipRows, fmt0, fmt2 } from './charts.js';
-import { pse, plural, warsaw, todayIso, addDays, MONTHS, $, esc, errorBox, empty, table, tilesHtml, redraws, views, drawChart, initTheme, initInstall } from './common.js';
+import { pse, eurostat, EU_NAMES, plural, warsaw, todayIso, addDays, MONTHS, $, esc, errorBox, empty, table, tilesHtml, redraws, views, drawChart, initTheme, initInstall } from './common.js';
 
 // ---------- Źródło: ENTSOG Transparency Platform (dane GAZ-SYSTEM), bez klucza, CORS * ----------
 // Przepływy fizyczne (Physical Flow) i moc techniczna ciągła (Firm Technical) w punktach systemu przesyłowego,
@@ -234,30 +234,6 @@ function groups(s) {
   return g;
 }
 
-// ---------- Eurostat: bilanse gazu (oficjalna sprawozdawczość krajowa, CORS *, licencja CC BY 4.0) ----------
-const EUROSTAT = 'https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data';
-async function eurostat(dataset, params) {
-  const q = new URLSearchParams({ geo: 'PL', siec: 'G3000', lang: 'en' });
-  for (const [k, v] of Object.entries(params)) for (const x of [].concat(v)) q.append(k, x);
-  const r = await fetch(`${EUROSTAT}/${dataset}?${q}`);
-  if (!r.ok) throw new Error(`Eurostat: HTTP ${r.status}`);
-  const d = await r.json();
-  // JSON-stat: wartości w płaskiej tablicy indeksowanej iloczynem wymiarów.
-  const stride = d.size.map((_, i) => d.size.slice(i + 1).reduce((a, b) => a * b, 1));
-  const pos = (dim, code) => d.dimension[dim].category.index[code];
-  const get = (sel) => {
-    let k = 0;
-    for (const [i, dim] of d.id.entries()) {
-      const p = sel[dim] != null ? pos(dim, sel[dim]) : 0;
-      if (p == null) return null;
-      k += p * stride[i];
-    }
-    return d.value[k] ?? null;
-  };
-  const times = Object.keys(d.dimension.time.category.index).sort();
-  return { get, times, updated: d.updated };
-}
-
 // Roczny bilans (nrg_bal_c, GWh): na co zużyto gaz. Grupy sumują się do zużycia krajowego brutto (GIC) z różnicami statystycznymi.
 const USE_GROUPS = [
   { head: 'Produkcja prądu i ciepła', rows: [
@@ -289,18 +265,33 @@ function loadUses() {
     const now = new Date();
     const since = `${now.getUTCFullYear() - 2}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
     usesData = Promise.all([
-      eurostat('nrg_cb_gasm', { unit: 'TJ_GCV', nrg_bal: ['IC_OBS', 'TI_EHG_MAP'], sinceTimePeriod: since }),
-      eurostat('nrg_bal_c', { unit: 'GWH', sinceTimePeriod: String(now.getUTCFullYear() - 5) }),
+      eurostat('nrg_cb_gasm', { geo: 'PL', siec: 'G3000', unit: 'TJ_GCV', nrg_bal: ['IC_OBS', 'TI_EHG_MAP'], sinceTimePeriod: since }),
+      eurostat('nrg_bal_c', { geo: 'PL', siec: 'G3000', unit: 'GWH', sinceTimePeriod: String(now.getUTCFullYear() - 5) }),
+      eurostat('nrg_d_hhq', { geo: 'PL', siec: 'G3000', unit: 'TJ', sinceTimePeriod: String(now.getUTCFullYear() - 5) }),
     ]);
     usesData.catch(() => { usesData = null; });
   }
   return usesData;
 }
 
+// Gospodarstwa domowe według zastosowania (nrg_d_hhq) — twarde dane roczne.
+const HH_USES = [['FC_OTH_HH_E_SH', 'Ogrzewanie pomieszczeń', 'var(--s2)'], ['FC_OTH_HH_E_WH', 'Ciepła woda', 'var(--s1)'], ['FC_OTH_HH_E_CK', 'Gotowanie', 'var(--s3)'], ['FC_OTH_HH_E_OE', 'Inne', 'var(--ink-2)']];
+function householdsHtml(hh, twh) {
+  const years = hh.times.filter((t) => hh.get({ nrg_bal: 'FC_OTH_HH_E', time: t }) != null);
+  if (!years.length) return '';
+  const Y = years[years.length - 1];
+  const v = (c) => (hh.get({ nrg_bal: c, time: Y }) ?? 0) / 3600; // TJ (wartość opałowa) → TWh
+  const tot = v('FC_OTH_HH_E');
+  const rows = HH_USES.filter(([c]) => v(c) > 0.05);
+  return `<h4 class="grp-h">Gospodarstwa domowe według zastosowania — ${Y} <span class="muted">· ${twh(tot)}</span></h4>
+    <div class="stackbar" role="img" aria-label="Zużycie gazu w gospodarstwach domowych według zastosowania">${rows.map(([c, n, col]) => `<span style="flex:${v(c)};background:${col}" title="${n}: ${twh(v(c))}"></span>`).join('')}</div>
+    <div class="legend">${rows.map(([c, n, col]) => `<span class="key"><i class="sw" style="background:${col}"></i>${n}: <b>${twh(v(c))}</b> (${fmt0.format((v(c) / tot) * 100)}%)</span>`).join('')}</div>`;
+}
+
 async function renderUses() {
   const box = $('#g-uses-body');
   try {
-    const [mon, yr] = await loadUses();
+    const [mon, yr, hh] = await loadUses();
     const twh = (v) => (v == null ? '—' : `${fmt2.format(v)} TWh`);
     // Miesiące: TJ (ciepło spalania) → TWh.
     const months = mon.times.filter((t) => mon.get({ nrg_bal: 'IC_OBS', time: t }) != null);
@@ -344,6 +335,7 @@ async function renderUses() {
         { l: 'Wyprodukowano z niego', v: `${twh(gep)} prądu`, d: `i ${twh(ghp)} ciepła (brutto)` },
       ]) +
       USE_GROUPS.map((g, k) => `<h4 class="grp-h">${g.head} <span class="muted">· ${twh(g.rows.reduce((a, [c, , x]) => a + val(c, Y, x), 0))}</span></h4><div class="util">${g.rows.slice().sort((p, q) => val(q[0], Y, q[2]) - val(p[0], Y, p[2])).map((r) => rowHtml(r, colors[k])).join('')}</div>`).join('') +
+      householdsHtml(hh, twh) +
       table(['Pozycja bilansu [TWh]', ...years.slice(-3)], [
         ['Zużycie krajowe brutto', ...years.slice(-3).map((t) => fmt2.format(val('GIC', t)))],
         ...USE_GROUPS.flatMap((g) => g.rows.map(([c, name, x]) => [name, ...years.slice(-3).map((t) => fmt2.format(val(c, t, x)))])),
@@ -369,8 +361,78 @@ async function renderUses() {
   }
 }
 
+// ---------- Uzależnienie od importu ----------
+// Miesięcznie z pomiarów ENTSOG (import netto vs wydobycie krajowe), rocznie oficjalny wskaźnik Eurostatu (nrg_ind_id).
+const DEP_FUELS = [['TOTAL', 'Cała energia', 'var(--s1)'], ['G3000', 'Gaz ziemny', 'var(--g-gaz)'], ['O4000XBIO', 'Ropa i paliwa', 'var(--s7)'], ['C0000X0350-0370', 'Węgiel i inne paliwa stałe', 'var(--g-wk)']];
+let depData;
+async function renderDep() {
+  const box = $('#g-dep-body');
+  try {
+    // Miesiące z dziennych danych ENTSOG (cały pobrany rok, niezależnie od przełącznika zakresu).
+    const all = { n: data.days.length, days: data.days, f: (key, dir) => data.flow.get(`${key}|${dir}`) || new Array(data.days.length).fill(null) };
+    const g = groups(all);
+    const IMP = ['bp', 'lng', 'de', 'cz', 'lt', 'skua'];
+    const byM = new Map();
+    all.days.forEach((d, i) => {
+      const m = d.slice(0, 7);
+      const e = byM.get(m) || { imp: 0, exp: 0, prod: 0, n: 0 };
+      e.imp += sum(IMP.map((id) => g[id][i]));
+      e.exp += g.exp[i] ?? 0;
+      e.prod += g.prod[i] ?? 0;
+      e.n++;
+      byM.set(m, e);
+    });
+    const months = [...byM.keys()].sort();
+    const full = (m) => byM.get(m).n === new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)).getUTCDate();
+    const share = months.map((m) => { const e = byM.get(m); const net = e.imp - e.exp; return (net / (net + e.prod)) * 100; });
+    const mLabel = (m) => `${MONTHS[+m.slice(5, 7) - 1]} ${m.slice(0, 4)}${full(m) ? '' : ' (niepełny)'}`;
+    depData ??= Promise.all([
+      eurostat('nrg_ind_id', { geo: ['PL', 'EU27_2020'], sinceTimePeriod: '2000' }),
+      eurostat('nrg_ind_id', { siec: 'G3000', sinceTimePeriod: String(new Date().getUTCFullYear() - 4) }),
+    ]).catch((e) => { depData = null; throw e; });
+    const [pl, eu] = await depData;
+    const years = pl.times.filter((t) => pl.get({ geo: 'PL', siec: 'TOTAL', time: t }) != null);
+    const Y = years[years.length - 1];
+    const val = (geo, siec, t = Y) => pl.get({ geo, siec, time: t });
+    const euYears = eu.times.filter((t) => eu.get({ geo: 'PL', time: t }) != null);
+    const EY = euYears[euYears.length - 1];
+    const countries = Object.keys(EU_NAMES).map((c) => ({ c, v: eu.get({ geo: c, time: EY }) })).filter((x) => x.v != null).sort((a, b) => b.v - a.v);
+    const pc = (v) => (v == null ? '—' : `${fmt0.format(v)}%`);
+    const fullM = months.filter(full);
+    const lastFull = months.indexOf(fullM[fullM.length - 1]);
+    const maxV = Math.max(100, ...countries.map((x) => x.v));
+    box.innerHTML = tilesHtml([
+      lastFull >= 0 ? { l: `Gaz: import netto w dostawach — ${mLabel(months[lastFull])}`, v: pc(share[lastFull]), d: `wydobycie krajowe ${fmt2.format(byM.get(months[lastFull]).prod / 1000)} TWh, import netto ${fmt2.format((byM.get(months[lastFull]).imp - byM.get(months[lastFull]).exp) / 1000)} TWh` } : null,
+      { l: `Gaz: oficjalny wskaźnik ${Y}`, v: pc(val('PL', 'G3000')), d: `UE-27: ${pc(val('EU27_2020', 'G3000'))}` },
+      { l: `Cała energia: ${Y}`, v: pc(val('PL', 'TOTAL')), d: `UE-27: ${pc(val('EU27_2020', 'TOTAL'))}` },
+    ]) +
+      '<h3 class="sub-h">Gaz miesięcznie — udział importu netto w dostawach (pomiary ENTSOG)</h3><div class="chart" id="g-dep-m"></div>' +
+      `<h3 class="sub-h">Rocznie według paliw — Polska ${years[0]}–${Y}</h3><div class="chart" id="g-dep-y"></div>` +
+      `<h3 class="sub-h">Uzależnienie od importu gazu w krajach UE — ${EY}</h3><div class="util">${countries
+        .map((x) => `<div class="urow${x.c === 'PL' ? ' hl' : ''}"><div class="uname"><i class="sw" style="background:${x.c === 'PL' ? 'var(--g-gaz)' : 'var(--ink-2)'}"></i>${EU_NAMES[x.c]}</div>
+          <div class="utrack"><span class="ubar" style="width:${Math.max(0, (x.v / maxV) * 100)}%;background:${x.c === 'PL' ? 'var(--g-gaz)' : 'var(--ink-2)'}"></span></div>
+          <div class="uval"><b>${pc(x.v)}</b></div></div>`).join('')}</div>` +
+      table(['Rok', ...DEP_FUELS.map(([, n]) => `${n} — PL`), 'Cała energia — UE-27', 'Gaz — UE-27'], years.map((t) => [t, ...DEP_FUELS.map(([c]) => pc(val('PL', c, t))), pc(val('EU27_2020', 'TOTAL', t)), pc(val('EU27_2020', 'G3000', t))]).reverse()) +
+      '<p class="note">Uzależnienie od importu = import netto ÷ zużycie krajowe brutto (Eurostat <a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_ind_id/default/table" rel="noopener">nrg_ind_id</a>, rocznie). Wartość ujemna oznacza eksportera netto, powyżej 100% — import większy od zużycia (np. na zapas). Eurostat nie publikuje miesięcznego wydobycia gazu w Polsce od września 2023, dlatego wskaźnik miesięczny liczymy z pomiarów GAZ-SYSTEM w ENTSOG: import netto ÷ (import netto + wydobycie krajowe), bez zmian zapasu w magazynach. Kraje bez własnego zużycia gazu lub bez danych pominięto.</p>';
+    drawChart('g-dep-m', $('#g-dep-m'), {
+      n: months.length, bars: true, series: [{ name: 'Import netto w dostawach', color: 'var(--g-gaz)', values: share }], barColor: () => 'var(--g-gaz)',
+      xTicks: months.map((m, i) => ({ i, label: MONTHS[+m.slice(5, 7) - 1], at: 'center' })), height: 180, minSpan: 3, yFmt: (v) => `${fmt0.format(v)}%`,
+      label: 'Udział importu netto w dostawach gazu, miesięcznie',
+      tooltip: (i) => { const e = byM.get(months[i]); return tipRows(mLabel(months[i]), [{ name: 'Udział importu netto', color: 'var(--g-gaz)', value: pc(share[i]) }, { name: 'Import', value: `${fmt2.format(e.imp / 1000)} TWh` }, { name: 'Eksport', value: `${fmt2.format(e.exp / 1000)} TWh` }, { name: 'Wydobycie krajowe', value: `${fmt2.format(e.prod / 1000)} TWh` }]); },
+    }, 'dep-m');
+    drawChart('g-dep-y', $('#g-dep-y'), {
+      n: years.length, markers: years.length < 30, series: DEP_FUELS.map(([c, n, col]) => ({ name: n, color: col, values: years.map((t) => val('PL', c, t)) })),
+      xTicks: years.map((t, i) => ({ i, label: t, at: 'center' })).filter((x) => +x.label % 5 === 0 || x.i === years.length - 1), height: 260, minSpan: 5, yFmt: (v) => `${fmt0.format(v)}%`,
+      label: 'Uzależnienie Polski od importu energii według paliw, rocznie',
+      tooltip: (i, on) => tipRows(years[i], [...DEP_FUELS.filter(([, n]) => on(n)).map(([c, n, col]) => ({ name: n, color: col, value: pc(val('PL', c, years[i])) })), { name: 'UE-27, cała energia', value: pc(val('EU27_2020', 'TOTAL', years[i])) }]),
+    }, 'dep-y');
+  } catch (e) {
+    box.innerHTML = errorBox(e);
+  }
+}
+
 // ---------- Renderowanie ----------
-const SECTIONS = ['g-day', 'g-price', 'g-supply', 'g-use', 'g-uses', 'g-borders', 'g-store', 'g-points', 'g-power'];
+const SECTIONS = ['g-day', 'g-price', 'g-supply', 'g-use', 'g-uses', 'g-dep', 'g-borders', 'g-store', 'g-points', 'g-power'];
 
 function renderAll() {
   redraws.clear();
@@ -389,6 +451,7 @@ function renderAll() {
   renderSupply(s, g);
   renderUse(s, g);
   renderUses();
+  renderDep();
   renderBorders(s);
   renderStore(s);
   renderPoints(s);
@@ -570,7 +633,7 @@ function renderStore(s) {
     '<p class="note">Przepływy między systemem przesyłowym a magazynami (dane ENTSOG). Poziomu zapełnienia magazynów nie da się pobrać bez klucza API (GIE AGSI+), dlatego pokazujemy zmianę zapasu w wybranym okresie. Pojemność czynna polskich magazynów to ok. 3,3 mld m³ (ok. 36 TWh).</p>';
   drawChart('g-store', $('#g-store-chart'), {
     n: s.n, bars: true, barColor: (v) => (v >= 0 ? 'var(--s2)' : 'var(--s1)'), series: [{ name: 'Magazyny netto', color: 'var(--s2)', values: net }], xTicks: dayTicks(s.days), height: 220, minSpan: 7,
-    legend: true, legendExtra: '<span class="key"><i class="sw" style="background:var(--s2)"></i>zatłaczanie (+)</span><span class="key"><i class="sw" style="background:var(--s1)"></i>odbiór (−)</span>',
+    legend: false, legendExtra: '<span class="key"><i class="sw" style="background:var(--s2)"></i>zatłaczanie (+)</span><span class="key"><i class="sw" style="background:var(--s1)"></i>odbiór (−)</span>',
     label: 'Saldo magazynów gazu, GWh na dobę',
     tooltip: (i) => tipRows(gasDay(s.days[i]), [
       ...per.filter((p) => (p.in[i] ?? 0) + (p.out[i] ?? 0) > 0.05).map((p) => ({ name: p.name, value: `${(p.in[i] ?? 0) - (p.out[i] ?? 0) >= 0 ? '+' : '−'}${gwh(Math.abs((p.in[i] ?? 0) - (p.out[i] ?? 0)))}` })),

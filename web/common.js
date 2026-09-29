@@ -145,3 +145,54 @@ export function initInstall() {
   $('#install-help-close').addEventListener('click', () => { help.hidden = true; btn.focus(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !help.hidden) { help.hidden = true; btn.focus(); } });
 }
+
+// ---------- Eurostat (oficjalna statystyka UE, CORS *, licencja CC BY 4.0) ----------
+export const EUROSTAT = 'https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data';
+// Eurostat odrzuca zbyt wiele równoczesnych zapytań (odpowiedź bez nagłówka CORS → „Failed to fetch”),
+// więc wysyłamy najwyżej dwa naraz i ponawiamy nieudane.
+let esActive = 0;
+const esWaiting = [];
+async function esQueue(url) {
+  if (esActive >= 2) await new Promise((res) => esWaiting.push(res));
+  esActive++;
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`Eurostat: HTTP ${r.status}`);
+        return await r.json();
+      } catch (e) {
+        if (attempt >= 2) throw e;
+        await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
+      }
+    }
+  } finally {
+    esActive--;
+    esWaiting.shift()?.();
+  }
+}
+
+// Zwraca {get(sel), times, codes(dim), updated}; sel = {wymiar: kod}, pominięte wymiary = pierwszy kod.
+export async function eurostat(dataset, params) {
+  const q = new URLSearchParams({ lang: 'en' });
+  for (const [k, v] of Object.entries(params)) for (const x of [].concat(v)) q.append(k, x);
+  const d = await esQueue(`${EUROSTAT}/${dataset}?${q}`);
+  // JSON-stat: wartości w płaskiej tablicy indeksowanej iloczynem wymiarów.
+  const stride = d.size.map((_, i) => d.size.slice(i + 1).reduce((a, b) => a * b, 1));
+  const pos = (dim, code) => d.dimension[dim].category.index[code];
+  const get = (sel) => {
+    let k = 0;
+    for (const [i, dim] of d.id.entries()) {
+      const p = sel[dim] != null ? pos(dim, sel[dim]) : 0;
+      if (p == null) return null;
+      k += p * stride[i];
+    }
+    return d.value[k] ?? null;
+  };
+  const codes = (dim) => Object.keys(d.dimension[dim].category.index);
+  const times = codes('time').sort();
+  return { get, times, codes, updated: d.updated };
+}
+
+// Kraje UE po polsku (kody Eurostatu).
+export const EU_NAMES = { EU27_2020: 'UE-27', BE: 'Belgia', BG: 'Bułgaria', CZ: 'Czechy', DK: 'Dania', DE: 'Niemcy', EE: 'Estonia', IE: 'Irlandia', EL: 'Grecja', ES: 'Hiszpania', FR: 'Francja', HR: 'Chorwacja', IT: 'Włochy', CY: 'Cypr', LV: 'Łotwa', LT: 'Litwa', LU: 'Luksemburg', HU: 'Węgry', MT: 'Malta', NL: 'Holandia', AT: 'Austria', PL: 'Polska', PT: 'Portugalia', RO: 'Rumunia', SI: 'Słowenia', SK: 'Słowacja', FI: 'Finlandia', SE: 'Szwecja' };

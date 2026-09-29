@@ -1,3 +1,4 @@
+import { renderMix, renderBills } from './stats.js';
 import { tipRows, placeTip, hideTip, fmt0, fmt2 } from './charts.js';
 import { pse, FILES, TZ, HOUR, fKey, warsaw, todayIso, addDays, MONTHS, $, plural, esc, mw, errorBox, empty, table, tilesHtml, redraws, views, drawChart, initTheme, initInstall } from './common.js';
 
@@ -1205,6 +1206,8 @@ setDate(date);
 renderNow();
 renderRcem();
 renderCo2();
+renderMix();
+renderBills();
 renderAlert();
 
 // Odświeżanie: bilans co minutę, dane doby co 5 minut (gdy oglądamy dziś).

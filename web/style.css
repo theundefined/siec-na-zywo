@@ -295,3 +295,8 @@ img.logo { width: 32px; height: 32px; border-radius: 8px; }
 .grp-h { margin: 14px 0 6px; font-size: 0.9rem; }
 .sub-list { font-size: 0.78rem; color: var(--ink-2); flex-basis: 100%; }
 .sub-list summary { cursor: pointer; color: var(--muted); }
+.stackbar { display: flex; gap: 2px; height: 18px; margin: 4px 0 8px; }
+.stackbar span { border-radius: 2px; min-width: 2px; }
+.stackbar span:first-child { border-radius: 4px 2px 2px 4px; }
+.stackbar span:last-child { border-radius: 2px 4px 4px 2px; }
+.urow.hl .uname, .urow.hl .uval { font-weight: 700; }
