@@ -1,6 +1,6 @@
 import { renderMix, renderBills, renderRenYear, renderElecYear } from './stats.js';
 import { tipRows, placeTip, hideTip, fmt0, fmt2 } from './charts.js';
-import { pse, FILES, TZ, HOUR, fKey, warsaw, todayIso, addDays, MONTHS, $, plural, esc, mw, errorBox, empty, table, tilesHtml, redraws, views, drawChart, initTheme, initInstall, initTabs, clearGroups, staleNote } from './common.js';
+import { pse, FILES, TZ, HOUR, fKey, warsaw, todayIso, addDays, MONTHS, $, plural, esc, mw, errorBox, empty, table, tilesHtml, redraws, views, drawChart, initTheme, initInstall, initTabs, clearGroups, staleNote, initCountry } from './common.js';
 
 // ---------- Źródła danych (te same co w aplikacji Energetyczny Kompas) ----------
 
@@ -1048,15 +1048,18 @@ function multiDayTicks(grid) {
 }
 const periodLong = (grid, i) => `${fDayShort.format(grid.starts[i])}, ${fTime.format(grid.starts[i])}–${fTime.format(grid.starts[i] + grid.step)}`;
 
+let planDays = 7;
+try { planDays = +(localStorage.getItem('planDays') ?? 7) || 7; } catch { /* brak localStorage */ }
 async function renderPlan({ silent = false } = {}) {
   const box = $('#plan-body');
   const run = begin(box, silent);
   try {
-    const to = addDays(date, 6);
-    const rows = await pseMemo('pk5l-wp', `business_date ge '${date}' and business_date le '${to}'`, 1000);
+    const days = planDays;
+    const to = addDays(date, days - 1);
+    const rows = await pseMemo('pk5l-wp', `business_date ge '${date}' and business_date le '${to}'`, 3000);
     if (run.stale()) return;
     if (!rows.length) return void (box.innerHTML = empty('Brak prognozy dla wybranego okresu.'));
-    const grid = rangeGrid(date, 7, HOUR);
+    const grid = rangeGrid(date, days, HOUR);
     const n = grid.starts.length;
     const f = (k) => {
       const a = new Array(n).fill(null);
@@ -1086,7 +1089,8 @@ async function renderPlan({ silent = false } = {}) {
     const iMin = ii.reduce((a, i) => (a == null || surplus[i] < surplus[a] ? i : a), null);
     const iPv = pv.reduce((a, v, i) => (v != null && (a == null || v > pv[a]) ? i : a), null);
     const iWi = wi.reduce((a, v, i) => (v != null && (a == null || v > wi[a]) ? i : a), null);
-    box.innerHTML = tilesHtml([
+    const seg = `<div class="seg" role="group" aria-label="Horyzont prognozy">${[7, 14, 31].map((d) => `<button type="button" data-d="${d}" class="${d === days ? 'on' : ''}">${d} dni</button>`).join('')}</div>`;
+    box.innerHTML = seg + tilesHtml([
       iMin != null && { l: 'Najmniejsza nadwyżka ponad rezerwę', v: mw(surplus[iMin]), d: periodLong(grid, iMin) },
       iPv != null && { l: 'Szczyt PV (prognoza)', v: mw(pv[iPv]), d: periodLong(grid, iPv) },
       iWi != null && { l: 'Szczyt wiatru (prognoza)', v: mw(wi[iWi]), d: periodLong(grid, iWi) },
@@ -1094,17 +1098,25 @@ async function renderPlan({ silent = false } = {}) {
       '<div class="chart" id="plan-chart"></div>' +
       '<h3 class="sub-h">Zapas mocy w systemie</h3><div class="chart" id="plan-res-chart"></div>' +
       table(['Godzina', 'Zapotrzebowanie', 'Wiatr', 'PV', 'Nadwyżka ponad rezerwę', 'Nadwyżka dla PSE', 'Wymagana rezerwa'], grid.starts.map((_, i) => [periodLong(grid, i), ...[dem, wi, pv, surplus, avail, req].map((a) => (a[i] == null ? '—' : fmt0.format(a[i])))])) +
-      `<p class="note">Plan koordynacyjny PSE (wielkości podstawowe), godzinowo, od wybranego dnia na 7 dni. Publikacja: ${esc(rows[0].publication_ts?.slice(0, 16) || '—')}.</p>`;
+      `<p class="note">Plan koordynacyjny PSE (wielkości podstawowe), godzinowo, od wybranego dnia na ${days} dni (im dalej, tym mniej pewna). Publikacja: ${esc(rows[0].publication_ts?.slice(0, 16) || '—')}.</p>`;
     const now = grid.starts.findIndex((t) => Date.now() >= t && Date.now() < t + HOUR);
     const common = { n, xTicks: multiDayTicks(grid), minSpan: 6, nowIndex: now >= 0 ? now : null };
     drawChart('plan', $('#plan-chart'), {
-      ...common, series: s1, height: 260, label: 'Prognoza zapotrzebowania, wiatru i PV na 7 dni',
+      ...common, series: s1, height: 260, label: `Prognoza zapotrzebowania, wiatru i PV na ${days} dni`,
       tooltip: (i, on) => tipRows(periodLong(grid, i), s1.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) }))),
     }, 'plan');
     drawChart('plan-res', $('#plan-res-chart'), {
-      ...common, series: s2, height: 220, label: 'Prognozowany zapas mocy na 7 dni',
+      ...common, series: s2, height: 220, label: `Prognozowany zapas mocy na ${days} dni`,
       tooltip: (i, on) => tipRows(periodLong(grid, i), s2.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) }))),
     }, 'plan');
+    box.querySelector('.seg').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-d]');
+      if (!b || +b.dataset.d === planDays) return;
+      planDays = +b.dataset.d;
+      try { localStorage.setItem('planDays', planDays); } catch { /* j.w. */ }
+      clearGroups('plan');
+      renderPlan();
+    });
     run.restore();
   } catch (e) {
     if (run.stale()) return;
@@ -1146,33 +1158,47 @@ async function renderLolp({ silent = false } = {}) {
   }
 }
 
-// ---------- Ceny uprawnień do emisji CO₂ (rcco2) — ostatnie 12 miesięcy ----------
+// ---------- Ceny uprawnień do emisji CO₂ (rcco2) — cała historia API PSE (od czerwca 2024), domyślnie ostatni rok ----------
+let co2Range = 365;
+try { co2Range = +(localStorage.getItem('co2Range') ?? 365); } catch { /* brak localStorage */ }
 async function renderCo2() {
   const box = $('#co2-body');
   try {
-    const from = addDays(todayIso(), -365);
-    const rows = (await pse('rcco2', `business_date ge '${from}'`, 1000)).sort((a, b) => (a.business_date < b.business_date ? -1 : 1));
+    const rows = (await pse('rcco2', `business_date ge '2024-01-01'`, 3000)).sort((a, b) => (a.business_date < b.business_date ? -1 : 1));
     if (!rows.length) return void (box.innerHTML = empty('Brak danych.'));
     const n = rows.length;
     const eur = rows.map((r) => r.rcco2_eur);
     const last = rows[n - 1];
+    // Zakres: ostatni rok albo całość (widok wspólny dla wykresu; tabela i kafelki dla całego okresu widoku).
+    const setRange = (d) => { co2Range = d; views.set('co2', d && d < n ? [n - rows.filter((r) => r.business_date > addDays(last.business_date, -d)).length, n] : null); };
+    setRange(co2Range);
+    const inView = () => { const v = views.get('co2') || [0, n]; return rows.slice(v[0], v[1]); };
     const back = rows.find((r) => r.business_date >= addDays(last.business_date, -30)) || rows[0];
-    const mn = rows.reduce((a, r) => (r.rcco2_eur < a.rcco2_eur ? r : a));
-    const mx = rows.reduce((a, r) => (r.rcco2_eur > a.rcco2_eur ? r : a));
+    const vr = inView();
+    const mn = vr.reduce((a, r) => (r.rcco2_eur < a.rcco2_eur ? r : a));
+    const mx = vr.reduce((a, r) => (r.rcco2_eur > a.rcco2_eur ? r : a));
     const ch = ((last.rcco2_eur - back.rcco2_eur) / back.rcco2_eur) * 100;
     const fD = (iso) => new Intl.DateTimeFormat('pl-PL', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(iso + 'T00:00:00Z'));
-    const ticks = rows.map((r, i) => ({ r, i })).filter(({ r }, k) => k === 0 || r.business_date.slice(0, 7) !== rows[k - 1].business_date.slice(0, 7)).map(({ r, i }) => ({ i, label: MONTHS[+r.business_date.slice(5, 7) - 1] + (r.business_date.slice(5, 7) === '01' ? ` ${r.business_date.slice(0, 4)}` : '') }));
-    box.innerHTML = tilesHtml([
+    const ticks = rows.map((r, i) => ({ r, i })).filter(({ r }, k) => k > 0 && r.business_date.slice(0, 7) !== rows[k - 1].business_date.slice(0, 7)).map(({ r, i }) => ({ i, label: MONTHS[+r.business_date.slice(5, 7) - 1] + (r.business_date.slice(5, 7) === '01' ? ` ${r.business_date.slice(0, 4)}` : '') }));
+    const seg = `<div class="seg" role="group" aria-label="Zakres">${[[365, '12 miesięcy'], [0, `całość (od ${fD(rows[0].business_date)})`]].map(([d, l]) => `<button type="button" data-d="${d}" class="${d === co2Range ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    box.innerHTML = staleNote({ what: 'o cenach CO₂ (PSE)', asOf: last.business_date, maxDays: 5 }) + seg + tilesHtml([
       { l: `Ostatnia cena (${fD(last.business_date)})`, v: `${fmt2.format(last.rcco2_eur)} €/t`, d: `${fmt2.format(last.rcco2_pln)} zł/t` },
       { l: 'Zmiana w 30 dni', v: `${ch >= 0 ? '+' : '−'}${fmt0.format(Math.abs(ch))}%`, d: `od ${fmt2.format(back.rcco2_eur)} €/t` },
-      { l: 'Zakres 12 miesięcy', v: `${fmt0.format(mn.rcco2_eur)}–${fmt0.format(mx.rcco2_eur)} €/t`, d: `min ${fD(mn.business_date)}, maks ${fD(mx.business_date)}` },
+      { l: co2Range ? 'Zakres 12 miesięcy' : 'Zakres w całym okresie', v: `${fmt0.format(mn.rcco2_eur)}–${fmt0.format(mx.rcco2_eur)} €/t`, d: `min ${fD(mn.business_date)}, maks ${fD(mx.business_date)}` },
     ]) + '<div class="chart" id="co2-chart"></div>' +
       table(['Dzień', '€/t', 'zł/t'], rows.slice().reverse().map((r) => [r.business_date, fmt2.format(r.rcco2_eur), fmt2.format(r.rcco2_pln)])) +
-      '<p class="note">Cena uprawnień do emisji CO₂ (EUA) publikowana przez PSE — koszt, który ponoszą elektrownie węglowe i gazowe za każdą tonę CO₂.</p>';
+      '<p class="note">Cena uprawnień do emisji CO₂ (EUA) publikowana przez PSE — koszt, który ponoszą elektrownie węglowe i gazowe za każdą tonę CO₂. Historia sięga czerwca 2024 (od tej daty dane udostępnia nowe API PSE).</p>';
     drawChart('co2', $('#co2-chart'), {
       n, series: [{ name: 'Cena EUA', color: 'var(--s1)', values: eur }], xTicks: ticks, area: true, zero: false, height: 240, minSpan: 7, label: 'Cena uprawnień do emisji CO₂',
       tooltip: (i) => tipRows(fD(rows[i].business_date), [{ name: 'EUR', color: 'var(--s1)', value: `${fmt2.format(rows[i].rcco2_eur)} €/t` }, { name: 'PLN', value: `${fmt2.format(rows[i].rcco2_pln)} zł/t` }]),
     }, 'co2');
+    box.querySelector('.seg').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-d]');
+      if (!b) return;
+      try { localStorage.setItem('co2Range', b.dataset.d); } catch { /* j.w. */ }
+      co2Range = +b.dataset.d;
+      renderCo2();
+    });
   } catch (e) {
     box.innerHTML = errorBox(e);
   }
@@ -1217,6 +1243,7 @@ $('#date').addEventListener('change', (e) => e.target.value && setDate(e.target.
 
 initTheme();
 initInstall();
+initCountry();
 renderAlert();
 // Zakładki: dane dzienne ładujemy od razu (domyślny widok i odświeżanie), miesięczne i roczne — przy pierwszym otwarciu.
 initTabs({

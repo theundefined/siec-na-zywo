@@ -175,3 +175,19 @@ Ceny gazu dla gospodarstw domowych (`nrg_pc_202`) dla Polski kończą się na 20
 Regulamin JAO (jao.eu/terms-conditions) zabrania pobierania danych botami („scraping, or the use of bots … is strictly
 prohibited”) i ich rozpowszechniania bez pisemnej zgody; dozwolony jest tylko użytek wewnętrzny. Dlatego MaxBex nie jest
 używany na publicznej stronie — wymagałby zgody JAO (contact@jao.eu).
+
+### Dłuższe zakresy, wybór kraju, parametry cen
+- Gaz dziennie: 30 / 90 dni, 12 miesięcy, 2 lata, 5 lat. ENTSOG archiwizuje dane starsze niż 5 lat (zapytanie zwraca komunikat
+  o archiwum), więc maksimum to 1820 dni; pobieranie porcjami po roku. Powyżej ~400 dni wykresy pokazują średnie tygodniowe
+  (`slice()` w `gas.js`, energia w okresie przez `esum` × liczba dób w przedziale).
+- Przed maj 2022 działały punkty z Białorusi: `ITP-00104` Kondratki (gazociąg jamalski, PL-TSO-0001), `ITP-00092` Wysokoje,
+  `ITP-00094` Tietierowka — grupa „Import z Białorusi”; tranzyt jamalski do Niemiec to eksport przez Mallnow (`ITP-00096` exit).
+  Bilans wejścia − wyjścia na 5 latach: −20…+50 GWh/d (średnie tygodniowe) przy obrocie ~500 GWh/d.
+- Historia nowego API PSE zaczyna się 2024-06-14 (`his-gen-pal-sire`, `rcco2`, `pk5l-wp`) — gaz w produkcji prądu i CO₂ nie
+  sięgają dalej. `pk5l-wp` ma pełne dane godzinowe na ponad miesiąc naprzód (sekcja „Prognoza”: 7 / 14 / 31 dni).
+- Kraj dla sekcji Eurostatu (`GEO` w `common.js`, `?kraj=FR` lub zapamiętany wybór): dane dzienne zawsze dla Polski.
+  Ceny: Polska w zł (`NAC`), pozostałe kraje w euro. Energia jądrowa (`N9000`) ma własną serię; serie zerowe są ukrywane,
+  a przy 9 seriach miesięcznych wiatr lądowy i morski są łączone (paleta ma 8 barw). Kraje bez gazu (np. Cypr) mają w
+  Eurostacie zera zamiast braków — traktowane jak brak danych.
+- Ceny prądu: wybór rocznego zużycia domu (5 pasm `nrg_pc_204`; w `nrg_pc_204_c` pasmo DE ma kod `KWH_LE15000`)
+  i porównania z UE w PPS albo euro.

@@ -1,5 +1,5 @@
 import { tipRows, fmt0, fmt2 } from './charts.js';
-import { pse, eurostat, EU_NAMES, plural, warsaw, todayIso, addDays, MONTHS, $, esc, errorBox, empty, table, tilesHtml, drawChart, initTheme, initInstall, initTabs, clearGroups, rangeSeg, yearSelect, staleNote } from './common.js';
+import { pse, eurostat, EU_NAMES, plural, warsaw, todayIso, addDays, MONTHS, $, esc, errorBox, empty, table, tilesHtml, drawChart, initTheme, initInstall, initTabs, clearGroups, rangeSeg, yearSelect, staleNote, GEO, GEO_NAME, initCountry } from './common.js';
 
 // ---------- Źródło: ENTSOG Transparency Platform (dane GAZ-SYSTEM), bez klucza, CORS * ----------
 // Przepływy fizyczne (Physical Flow) i moc techniczna ciągła (Firm Technical) w punktach systemu przesyłowego,
@@ -7,7 +7,18 @@ import { pse, eurostat, EU_NAMES, plural, warsaw, todayIso, addDays, MONTHS, $, 
 // niezależny operator gazociągu jamalskiego (punkt Mallnow).
 const ENTSOG = 'https://transparency.entsog.eu/api/v1/operationaldatas';
 const OPERATORS = ['PL-TSO-0002', 'PL-TSO-0001'];
-const HISTORY_DAYS = 370;
+// ENTSOG archiwizuje dane starsze niż 5 lat (API zwraca wtedy komunikat zamiast danych).
+const MAX_HISTORY = 1820;
+
+// Dłuższe okresy pobieramy porcjami po roku (duże zapytania z limit=-1 bywają odrzucane).
+async function entsogRange(operator, from, to) {
+  const out = [];
+  for (let a = from; a <= to; a = addDays(a, 366)) {
+    const b = addDays(a, 365) < to ? addDays(a, 365) : to;
+    out.push(...(await entsog(operator, a, b)));
+  }
+  return out;
+}
 
 async function entsog(operator, from, to) {
   const q = new URLSearchParams({ operatorKey: operator, indicator: 'Physical Flow,Firm Technical', periodType: 'day', from, to, timezone: 'CET', limit: '-1' });
@@ -33,6 +44,9 @@ const SUPPLY = [
   { id: 'de', name: 'Import z Niemiec', color: 'var(--s5)' },
   { id: 'cz', name: 'Import z Czech', color: 'var(--s7)' },
   { id: 'lt', name: 'Import z Litwy', color: 'var(--s8)' },
+  // Do maja 2022: gaz rosyjski przez Białoruś (Kondratki — gazociąg jamalski, Wysokoje, Tietierowka). Seria pojawia się tylko
+  // w zakresach obejmujących te lata; szara, bo paleta ma 8 barw.
+  { id: 'by', name: 'Import z Białorusi (do 2022)', color: 'var(--ink-2)' },
   // Import z Ukrainy jest marginalny (ok. 0,15 TWh/rok), a paleta ma 8 barw — na wykresie łączymy go ze Słowacją,
   // w dymku i tabeli pokazujemy osobno.
   { id: 'skua', name: 'Import ze Słowacji i Ukrainy', color: 'var(--s3)', parts: [['sk', 'Import ze Słowacji'], ['ua', 'Import z Ukrainy']] },
@@ -59,6 +73,9 @@ const RULES = [
   ['DIS-00195', 'entry', 'cz', 1],
   ['DIS-00204', 'entry', 'cz', 1],
   ['ITP-00556', 'entry', 'lt', 1],
+  ['ITP-00104', 'entry', 'by', 1], // Kondratki (gazociąg jamalski, operator ISO)
+  ['ITP-00092', 'entry', 'by', 1], // Wysokoje
+  ['ITP-00094', 'entry', 'by', 1], // Tietierowka
   ['ITP-00177', 'entry', 'skua', 1],
   ['ITP-00177', 'entry', 'sk', 1],
   ['ITP-10008', 'entry', 'skua', 1],
@@ -121,6 +138,7 @@ const BORDERS = [
   { name: 'Słowacja', imp: [['ITP-00177', 'entry']], exp: [['ITP-00177', 'exit']] },
   { name: 'Ukraina', imp: [['ITP-10008', 'entry']], exp: [['ITP-10008', 'exit']] },
   { name: 'Litwa', imp: [['ITP-00556', 'entry']], exp: [['ITP-00556', 'exit']] },
+  { name: 'Białoruś (do 2022)', imp: [['ITP-00104', 'entry'], ['ITP-00092', 'entry'], ['ITP-00094', 'entry']], exp: [] },
 ];
 
 // ---------- Formatowanie ----------
@@ -134,14 +152,19 @@ const sum = (a) => a.reduce((s, v) => s + (v ?? 0), 0);
 const avgOf = (a) => { const x = a.filter((v) => v != null); return x.length ? sum(x) / x.length : null; };
 
 // Etykiety osi dni: przy powiększeniu co dzień, potem poniedziałki, a przy długich zakresach początki miesięcy.
-function dayTicks(days) {
+function dayTicks(days, step = 1) {
   return (v0, v1) => {
-    const span = v1 - v0;
+    const span = (v1 - v0) * step; // w dniach
     const out = [];
     for (let i = Math.max(0, Math.floor(v0)); i <= Math.min(days.length - 1, Math.ceil(v1)); i++) {
       const d = dt(days[i]);
-      if (span > 75) {
-        if (d.getUTCDate() === 1) out.push({ i, label: MONTHS[d.getUTCMonth()] + (d.getUTCMonth() === 0 ? ` ${d.getUTCFullYear()}` : '') });
+      const p = i > 0 ? dt(days[i - 1]) : null;
+      if (span > 900) {
+        if (p && p.getUTCFullYear() !== d.getUTCFullYear()) out.push({ i, label: String(d.getUTCFullYear()) });
+      } else if (span > 75) {
+        if (step === 1 ? d.getUTCDate() === 1 : p && p.getUTCMonth() !== d.getUTCMonth()) out.push({ i, label: MONTHS[d.getUTCMonth()] + (d.getUTCMonth() === 0 ? ` ${d.getUTCFullYear()}` : '') });
+      } else if (step > 1) {
+        out.push({ i, label: fDM.format(d) });
       } else if (span > 16) {
         if (d.getUTCDay() === 1) out.push({ i, label: fDM.format(d) });
       } else out.push({ i, label: fDM.format(d) });
@@ -154,10 +177,10 @@ function dayTicks(days) {
 let data; // { days, flow: Map(key|dir → GWh[]), cap: Map(key|dir → GWh[]) }
 let power; // Map(dzień → GWh energii elektrycznej z gazu)
 
-async function loadData() {
+async function loadData(historyDays) {
   const to = todayIso();
-  const from = addDays(to, -HISTORY_DAYS);
-  const rows = (await Promise.all(OPERATORS.map((op) => entsog(op, from, to)))).flat();
+  const from = addDays(to, -historyDays - 5);
+  const rows = (await Promise.all(OPERATORS.map((op) => entsogRange(op, from, to)))).flat();
   const flowRaw = new Map();
   const capRaw = new Map();
   const meta = new Map(); // punkt|kierunek → {label, type}
@@ -187,9 +210,9 @@ async function loadData() {
   const typical = Math.max(...[1, 2, 3, 4, 5, 6, 7].map((k) => count(addDays(current, -k))));
   last = last >= current ? addDays(current, -1) : last;
   while (last > from && count(last) < typical * 0.9) last = addDays(last, -1);
-  if (!last || !typical) return { days: [], flow: new Map(), cap: new Map(), unknown: [] };
+  if (!last || !typical) return { days: [], flow: new Map(), cap: new Map(), unknown: [], historyDays };
   const days = [];
-  for (let d = addDays(last, -HISTORY_DAYS + 5); d <= last; d = addDays(d, 1)) days.push(d);
+  for (let d = addDays(last, -historyDays + 1); d <= last; d = addDays(d, 1)) days.push(d);
   const flow = new Map([...flowRaw].map(([k, m]) => [k, days.map((d) => m.get(d) ?? null)]));
   const cap = new Map([...capRaw].map(([k, list]) => {
     list.sort((a, b) => (a.from < b.from ? -1 : 1));
@@ -203,12 +226,20 @@ async function loadData() {
   const known = new Set([...RULES.map(([k, d]) => `${k}|${d}`), ...STORAGES.flatMap((x) => [`${x.key}|entry`, `${x.key}|exit`])]);
   const unknown = [...flow].filter(([k, vals]) => !known.has(k) && Math.max(0, ...vals.map((v) => v ?? 0)) >= UNKNOWN_MIN)
     .map(([k, vals]) => ({ ...meta.get(k), avg: vals.reduce((a, v) => a + (v ?? 0), 0) / vals.length }));
-  return { days, flow, cap, unknown };
+  return { days, flow, cap, unknown, historyDays };
 }
 
+// Najstarsze dane generacji w nowym API PSE (sprawdzone zapytaniem $orderby=business_date asc).
+const PSE_SINCE = '2024-06-14';
 async function loadPower(from) {
   // Generacja z gazu ziemnego (GZ) i koksowniczego (GK) z PSE: kwadranse MW → energia doby kalendarzowej.
-  const rows = await pse('his-gen-pal-sire', `business_date ge '${from}' and (alias_sire eq 'GZ' or alias_sire eq 'GK')`, 100000, 'business_date,alias_sire,value');
+  // Porcjami po roku (~70 tys. rekordów; limit $first to 100 tys.).
+  const start = from < PSE_SINCE ? PSE_SINCE : from;
+  const rows = [];
+  for (let a = start; a <= todayIso(); a = addDays(a, 366)) {
+    const b = addDays(a, 365);
+    rows.push(...(await pse('his-gen-pal-sire', `business_date ge '${a}' and business_date le '${b}' and (alias_sire eq 'GZ' or alias_sire eq 'GK')`, 100000, 'business_date,alias_sire,value')));
+  }
   const m = new Map();
   for (const r of rows) {
     const v = parseFloat(String(r.value).replace(',', '.'));
@@ -221,17 +252,44 @@ async function loadPower(from) {
 }
 
 // ---------- Stan widoku ----------
-const RANGES = { 30: '30 dni', 90: '90 dni', 365: '12 miesięcy' };
+const RANGES = { 30: '30 dni', 90: '90 dni', 365: '12 miesięcy', 730: '2 lata', 1820: '5 lat' };
 let range = 90;
 try { range = +localStorage.getItem('gasRange') || 90; } catch { /* brak localStorage */ }
 if (!RANGES[range]) range = 90;
 
-function slice() {
-  const n = Math.min(range, data.days.length);
-  const a = data.days.length - n;
-  const cut = (arr) => (arr ? arr.slice(a) : new Array(n).fill(null));
-  return { n, days: data.days.slice(a), f: (key, dir) => cut(data.flow.get(`${key}|${dir}`)), c: (key, dir) => cut(data.cap.get(`${key}|${dir}`)) };
+// Wycinek danych dla wybranego zakresu. Powyżej ~400 dni agregujemy do tygodni (średnia GWh/d w tygodniu):
+// tysiące słupków na wykres spowalniałyby stronę na telefonie. s.w = liczba dni w przedziale (do sum energii).
+function slice(days = range) {
+  const n0 = Math.min(days, data.days.length);
+  const a = data.days.length - n0;
+  const days0 = data.days.slice(a);
+  if (n0 <= 400) {
+    const cut = (arr) => (arr ? arr.slice(a) : new Array(n0).fill(null));
+    return { n: n0, days: days0, w: new Array(n0).fill(1), spans: days0.map((d) => [d, d]), weekly: false, f: (key, dir) => cut(data.flow.get(`${key}|${dir}`)), c: (key, dir) => cut(data.cap.get(`${key}|${dir}`)) };
+  }
+  const buckets = [];
+  for (let e = n0; e > 0; e -= 7) buckets.unshift([Math.max(0, e - 7), e]); // ostatni tydzień kończy się na ostatniej dobie
+  const avg = (arr) => buckets.map(([x, y]) => {
+    if (!arr) return null;
+    let t = 0;
+    let c = 0;
+    for (let i = a + x; i < a + y; i++) if (arr[i] != null) { t += arr[i]; c++; }
+    return c ? t / c : null;
+  });
+  return {
+    n: buckets.length, days: buckets.map(([x]) => days0[x]), w: buckets.map(([x, y]) => y - x), spans: buckets.map(([x, y]) => [days0[x], days0[y - 1]]), weekly: true,
+    f: (key, dir) => avg(data.flow.get(`${key}|${dir}`)), c: (key, dir) => avg(data.cap.get(`${key}|${dir}`)),
+  };
 }
+// Energia w okresie (GWh): suma średnich dobowych × liczba dób w przedziale.
+const esum = (arr, s) => arr.reduce((t, v, i) => t + (v ?? 0) * s.w[i], 0);
+// Etykiety przedziału: doba gazowa albo tydzień.
+const lab = (s, i) => (s.weekly ? `tydzień ${fDM.format(dt(s.spans[i][0]))}–${fDay.format(dt(s.spans[i][1]))} (średnio na dobę)` : gasDay(s.days[i]));
+const tl = (s, i) => (s.weekly ? `${s.spans[i][0]} – ${s.spans[i][1]}` : s.days[i]);
+const hdr = (s) => (s.weekly ? 'Tydzień (średnio na dobę)' : 'Doba gazowa');
+// Serie pokazywane tylko, gdy w wybranym okresie mają przepływ (Białoruś do 2022, nieprzypisane punkty).
+const OPTIONAL = new Set(['by', 'unkIn', 'unkOut']);
+const present = (list, g) => list.filter((x) => !OPTIONAL.has(x.id) || g[x.id].some((v) => (v ?? 0) > 0.05));
 
 function groups(s) {
   const g = Object.fromEntries([...SUPPLY, ...USE, { id: 'sk' }, { id: 'ua' }, UNK_IN, UNK_OUT].map((x) => [x.id, new Array(s.n).fill(null)]));
@@ -289,9 +347,11 @@ const twhF = (v) => (v == null ? '—' : `${fmt2.format(v)} TWh`);
 async function renderUsesMonthly() {
   const box = $('#g-uses-m-body');
   try {
-    const mon = await eurostat('nrg_cb_gasm', { geo: 'PL', siec: 'G3000', unit: 'TJ_GCV', nrg_bal: ['IC_OBS', 'TI_EHG_MAP'], sinceTimePeriod: '2013-01' });
-    const months = mon.times.filter((t) => mon.get({ nrg_bal: 'IC_OBS', time: t }) != null && mon.get({ nrg_bal: 'TI_EHG_MAP', time: t }) != null);
+    const mon = await eurostat('nrg_cb_gasm', { geo: GEO, siec: 'G3000', unit: 'TJ_GCV', nrg_bal: ['IC_OBS', 'TI_EHG_MAP'], sinceTimePeriod: '2013-01' });
+    // Kraje bez gazu (np. Cypr) mają w Eurostacie zera zamiast braków — traktujemy je jak brak danych.
+    const months = mon.times.filter((t) => mon.get({ nrg_bal: 'IC_OBS', time: t }) > 0 && mon.get({ nrg_bal: 'TI_EHG_MAP', time: t }) != null);
     const n = months.length;
+    if (!n) return void (box.innerHTML = empty(`Eurostat nie publikuje miesięcznych danych o gazie dla kraju: ${esc(GEO_NAME)}.`));
     const ic = months.map((t) => mon.get({ nrg_bal: 'IC_OBS', time: t }) / 3600); // TJ → TWh
     const pw = months.map((t) => mon.get({ nrg_bal: 'TI_EHG_MAP', time: t }) / 3600);
     const rest = ic.map((v, i) => v - pw[i]);
@@ -304,7 +364,7 @@ async function renderUsesMonthly() {
       { l: 'W tym energetyka zawodowa', v: twhF(pw[last]), d: `${fmt0.format((pw[last] / ic[last]) * 100)}% zużycia w miesiącu` },
       { l: 'Energetyka zawodowa, ostatnie 12 mies.', v: twhF(sum(pw.slice(-12))), d: `${fmt0.format((sum(pw.slice(-12)) / sum(ic.slice(-12))) * 100)}% z ${twhF(sum(ic.slice(-12)))}` },
     ]) + seg.html +
-      '<div class="chart" id="g-uses-m-chart"></div>' +
+      `<h3 class="sub-h">${esc(GEO_NAME)}</h3><div class="chart" id="g-uses-m-chart"></div>` +
       table(['Miesiąc', 'Zużycie krajowe [TWh]', 'Energetyka zawodowa [TWh]', 'Pozostałe [TWh]', 'Udział energetyki'], months.map((t, i) => [mLabel(t), fmt2.format(ic[i]), fmt2.format(pw[i]), fmt2.format(rest[i]), `${fmt0.format((pw[i] / ic[i]) * 100)}%`]).reverse()) +
       `<p class="note">Eurostat <a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_cb_gasm/default/table" rel="noopener">nrg_cb_gasm</a> (licencja CC BY 4.0), dane od ${mLabel(months[0])}, opóźnienie ok. 1 miesiąca. Miesięcznie rozróżniana jest tylko energetyka zawodowa (elektrownie, elektrociepłownie i ciepłownie, których podstawową działalnością jest produkcja energii) — elektrociepłownie przemysłowe są w „pozostałych”. Pełny podział na odbiorców jest w zakładce „Roczne”. ${UNIT_NOTE} Dane zaktualizowane ${esc(new Date(mon.updated).toLocaleDateString('pl-PL'))}.</p>`;
     seg.bind(box);
@@ -313,7 +373,7 @@ async function renderUsesMonthly() {
     drawChart('g-uses-m', $('#g-uses-m-chart'), {
       n, stacked: true,
       series: [{ name: PW, color: 'var(--g-gaz)', values: pw }, { name: 'Pozostałe zużycie', color: 'var(--ink-2)', values: rest }],
-      xTicks: ticks, height: 280, minSpan: 6, yFmt: (v) => `${fmt0.format(v)} TWh`, label: 'Miesięczne zużycie gazu: energetyka zawodowa i pozostałe, TWh',
+      xTicks: ticks, height: 280, minSpan: 6, yFmt: (v) => `${fmt0.format(v)} TWh`, label: `Miesięczne zużycie gazu: energetyka zawodowa i pozostałe — ${GEO_NAME}, TWh`,
       tooltip: (i, on) => tipRows(mLabel(months[i]), [
         ...(on('Pozostałe zużycie') ? [{ name: 'Pozostałe zużycie', color: 'var(--ink-2)', value: twhF(rest[i]) }] : []),
         ...(on(PW) ? [{ name: 'Energetyka zawodowa', color: 'var(--g-gaz)', value: `${twhF(pw[i])} · ${fmt0.format((pw[i] / ic[i]) * 100)}%` }] : []),
@@ -330,6 +390,7 @@ const HH_USES = [['FC_OTH_HH_E_SH', 'Ogrzewanie pomieszczeń', 'var(--s2)'], ['F
 function householdsHtml(hh, Y) {
   const has = hh.get({ nrg_bal: 'FC_OTH_HH_E', time: Y }) != null;
   const years = hh.times.filter((t) => hh.get({ nrg_bal: 'FC_OTH_HH_E', time: t }) != null);
+  if (!years.length) return '';
   if (!has) return `<h4 class="grp-h">Gospodarstwa domowe według zastosowania — ${Y}</h4><p class="muted">Brak danych dla tego roku (Eurostat publikuje je od ${years[0]}).</p>`;
   const v = (c) => (hh.get({ nrg_bal: c, time: Y }) ?? 0) / 3600; // TJ (wartość opałowa) → TWh
   const tot = v('FC_OTH_HH_E');
@@ -344,11 +405,12 @@ async function renderUsesYear() {
   const box = $('#g-uses-y-body');
   try {
     const [yr, hh] = await Promise.all([
-      eurostat('nrg_bal_c', { geo: 'PL', siec: 'G3000', unit: 'GWH', sinceTimePeriod: '1990' }),
-      eurostat('nrg_d_hhq', { geo: 'PL', siec: 'G3000', unit: 'TJ', sinceTimePeriod: '2000' }),
+      eurostat('nrg_bal_c', { geo: GEO, siec: 'G3000', unit: 'GWH', sinceTimePeriod: '1990' }),
+      eurostat('nrg_d_hhq', { geo: GEO, siec: 'G3000', unit: 'TJ', sinceTimePeriod: '2000' }),
     ]);
-    const years = yr.times.filter((t) => yr.get({ nrg_bal: 'GIC', time: t }) != null);
+    const years = yr.times.filter((t) => yr.get({ nrg_bal: 'GIC', time: t }) > 0);
     const n = years.length;
+    if (!n) return void (box.innerHTML = empty(`Eurostat nie publikuje bilansu gazu dla kraju: ${esc(GEO_NAME)}.`));
     const vf = (t) => (c) => (yr.get({ nrg_bal: c, time: t }) ?? 0) / 1000;
     const long = years.map((t) => USE_LONG.map((x) => x.f(vf(t))));
     const gepS = years.map((t) => vf(t)('GEP'));
@@ -368,7 +430,7 @@ async function renderUsesYear() {
           <div class="uval"><b>${twhF(x)}</b> <span class="muted">${fmt0.format((x / gic) * 100)}% zużycia</span></div></div>`;
       };
       const t3 = years.slice(Math.max(0, years.indexOf(Y) - 2), years.indexOf(Y) + 1);
-      box.innerHTML = staleNote({ what: 'roczne Eurostatu o gazie', asOf: years[n - 1], maxDays: 640 }) + yearSelect('g-year', years, Y) +
+      box.innerHTML = staleNote({ what: 'roczne Eurostatu o gazie', asOf: years[n - 1], maxDays: 640 }) + yearSelect('g-year', years, Y) + `<span class="muted"> · ${esc(GEO_NAME)}</span>` +
         tilesHtml([
           { l: `Zużycie krajowe brutto ${Y}`, v: twhF(gic), d: 'w wartości opałowej' },
           { l: 'Gaz spalony w elektrowniach, elektrociepłowniach i ciepłowniach', v: twhF(v('TI_EHG_E')), d: `${fmt0.format((v('TI_EHG_E') / gic) * 100)}% zużycia` },
@@ -376,7 +438,7 @@ async function renderUsesYear() {
         ]) +
         USE_GROUPS.map((g, k) => `<h4 class="grp-h">${g.head} <span class="muted">· ${twhF(g.rows.reduce((a, r) => a + r[1](v), 0))}</span></h4><div class="util">${g.rows.slice().sort((p, q) => q[1](v) - p[1](v)).map((r) => rowHtml(r, colors[k])).join('')}</div>`).join('') +
         householdsHtml(hh, Y) +
-        `<h3 class="sub-h">Zużycie gazu według odbiorców, ${years[0]}–${years[n - 1]}</h3><div class="chart" id="g-uses-y-chart"></div>` +
+        `<h3 class="sub-h">Zużycie gazu według odbiorców — ${esc(GEO_NAME)}, ${years[0]}–${years[n - 1]}</h3><div class="chart" id="g-uses-y-chart"></div>` +
         `<h3 class="sub-h">Prąd i ciepło wyprodukowane z gazu, ${years[0]}–${years[n - 1]}</h3><div class="chart" id="g-uses-y-out"></div>` +
         table(['Pozycja bilansu [TWh]', ...t3], [
           ['Zużycie krajowe brutto', ...t3.map((t) => fmt2.format(vf(t)('GIC')))],
@@ -392,12 +454,12 @@ async function renderUsesYear() {
       const tag = (k) => years[k] + (years[k] === Y ? ' (wybrany rok)' : '');
       drawChart('g-uses-y', $('#g-uses-y-chart'), {
         n, stacked: true, series: USE_LONG.map((x, j) => ({ name: x.name, color: x.color, values: long.map((r) => r[j]) })), xTicks: ticks, height: 300, minSpan: 5,
-        yFmt: (x) => `${fmt0.format(x)} TWh`, label: 'Roczne zużycie gazu w Polsce według odbiorców, TWh',
+        yFmt: (x) => `${fmt0.format(x)} TWh`, label: `Roczne zużycie gazu według odbiorców — ${GEO_NAME}, TWh`,
         tooltip: (k, on) => tipRows(tag(k), [...USE_LONG.map((x, j) => [x, j]).reverse().filter(([x]) => on(x.name)).map(([x, j]) => ({ name: x.name, color: x.color, value: twhF(long[k][j]) })), { name: 'Razem (bez różnic stat.)', value: twhF(sum(long[k])) }]),
       }, 'g-uses-y');
       drawChart('g-uses-y-out', $('#g-uses-y-out'), {
         n, markers: true, series: [{ name: 'Prąd z gazu', color: 'var(--s1)', values: gepS }, { name: 'Ciepło z gazu', color: 'var(--s2)', values: ghpS }], xTicks: ticks, height: 220, minSpan: 5,
-        yFmt: (x) => `${fmt0.format(x)} TWh`, label: 'Prąd i ciepło wyprodukowane z gazu w Polsce, TWh rocznie',
+        yFmt: (x) => `${fmt0.format(x)} TWh`, label: `Prąd i ciepło wyprodukowane z gazu — ${GEO_NAME}, TWh rocznie`,
         tooltip: (k, on) => tipRows(tag(k), [['Prąd z gazu', 'var(--s1)', gepS[k]], ['Ciepło z gazu', 'var(--s2)', ghpS[k]]].filter(([nm]) => on(nm)).map(([nm, c, x]) => ({ name: nm, color: c, value: twhF(x) }))),
       }, 'g-uses-y');
     };
@@ -415,11 +477,12 @@ const pcF = (v) => (v == null ? '—' : `${fmt0.format(v)}%`);
 async function renderDepMonthly() {
   const box = $('#g-dep-m-body');
   try {
+    if (GEO !== 'PL') return void (box.innerHTML = empty(`Ten wskaźnik liczymy z pomiarów GAZ-SYSTEM (ENTSOG) — jest dostępny tylko dla Polski. Dla kraju ${esc(GEO_NAME)} zobacz oficjalny wskaźnik roczny w zakładce „Roczne”.`));
     await dataReady; // dane ENTSOG ładuje zakładka dzienna; czekamy, jeśli ktoś otworzył od razu tę zakładkę
     if (!data?.days.length) return void (box.innerHTML = empty('Brak danych ENTSOG.'));
     const all = { n: data.days.length, days: data.days, f: (key, dir) => data.flow.get(`${key}|${dir}`) || new Array(data.days.length).fill(null) };
     const g = groups(all);
-    const IMP = ['bp', 'lng', 'de', 'cz', 'lt', 'skua'];
+    const IMP = ['bp', 'lng', 'de', 'cz', 'lt', 'skua', 'by'];
     const byM = new Map();
     all.days.forEach((d, i) => {
       const m = d.slice(0, 7);
@@ -460,31 +523,32 @@ async function renderDepYear() {
   const box = $('#g-dep-y-body');
   try {
     const [pl, eu] = await Promise.all([
-      eurostat('nrg_ind_id', { geo: ['PL', 'EU27_2020'], sinceTimePeriod: '1990' }),
+      eurostat('nrg_ind_id', { geo: [GEO, 'EU27_2020'], sinceTimePeriod: '1990' }),
       eurostat('nrg_ind_id', { siec: 'G3000', sinceTimePeriod: '1990' }),
     ]);
-    const years = pl.times.filter((t) => pl.get({ geo: 'PL', siec: 'TOTAL', time: t }) != null);
+    const years = pl.times.filter((t) => pl.get({ geo: GEO, siec: 'TOTAL', time: t }) != null);
     const n = years.length;
+    if (!n) return void (box.innerHTML = empty(`Eurostat nie publikuje wskaźnika uzależnienia od importu dla kraju: ${esc(GEO_NAME)}.`));
     const val = (geo, siec, t) => pl.get({ geo, siec, time: t });
     const draw = () => {
       const Y = depYear && years.includes(depYear) ? depYear : years[n - 1];
       const countries = Object.keys(EU_NAMES).map((c) => ({ c, v: eu.get({ geo: c, time: Y }) })).filter((x) => x.v != null).sort((a, b) => b.v - a.v);
       const maxV = Math.max(100, ...countries.map((x) => x.v));
       box.innerHTML = yearSelect('dep-year', years, Y) +
-        tilesHtml(DEP_FUELS.map(([c, name]) => ({ l: `${name} — ${Y}`, v: pcF(val('PL', c, Y)), d: `UE-27: ${pcF(val('EU27_2020', c, Y))}` }))) +
-        `<h3 class="sub-h">Polska według paliw, ${years[0]}–${years[n - 1]}</h3><div class="chart" id="g-dep-y-chart"></div>` +
+        tilesHtml(DEP_FUELS.map(([c, name]) => ({ l: `${name} — ${Y}`, v: pcF(val(GEO, c, Y)), d: `UE-27: ${pcF(val('EU27_2020', c, Y))}` }))) +
+        `<h3 class="sub-h">${esc(GEO_NAME)} według paliw, ${years[0]}–${years[n - 1]}</h3><div class="chart" id="g-dep-y-chart"></div>` +
         `<h3 class="sub-h">Uzależnienie od importu gazu w krajach UE — ${Y}</h3><div class="util">${countries
-          .map((x) => `<div class="urow${x.c === 'PL' ? ' hl' : ''}"><div class="uname"><i class="sw" style="background:${x.c === 'PL' ? 'var(--g-gaz)' : x.c === 'EU27_2020' ? 'var(--ink)' : 'var(--ink-2)'}"></i>${EU_NAMES[x.c]}</div>
-            <div class="utrack"><span class="ubar" style="width:${Math.max(0, (x.v / maxV) * 100)}%;background:${x.c === 'PL' ? 'var(--g-gaz)' : x.c === 'EU27_2020' ? 'var(--ink)' : 'var(--ink-2)'}"></span></div>
+          .map((x) => `<div class="urow${x.c === GEO ? ' hl' : ''}"><div class="uname"><i class="sw" style="background:${x.c === GEO ? 'var(--g-gaz)' : x.c === 'EU27_2020' ? 'var(--ink)' : 'var(--ink-2)'}"></i>${EU_NAMES[x.c]}</div>
+            <div class="utrack"><span class="ubar" style="width:${Math.max(0, (x.v / maxV) * 100)}%;background:${x.c === GEO ? 'var(--g-gaz)' : x.c === 'EU27_2020' ? 'var(--ink)' : 'var(--ink-2)'}"></span></div>
             <div class="uval"><b>${pcF(x.v)}</b></div></div>`).join('')}</div>` +
-        table(['Rok', ...DEP_FUELS.map(([, nm]) => `${nm} — PL`), 'Cała energia — UE-27', 'Gaz — UE-27'], years.map((t) => [t, ...DEP_FUELS.map(([c]) => pcF(val('PL', c, t))), pcF(val('EU27_2020', 'TOTAL', t)), pcF(val('EU27_2020', 'G3000', t))]).reverse()) +
+        table(['Rok', ...DEP_FUELS.map(([, nm]) => `${nm} — ${GEO_NAME}`), 'Cała energia — UE-27', 'Gaz — UE-27'], years.map((t) => [t, ...DEP_FUELS.map(([c]) => pcF(val(GEO, c, t))), pcF(val('EU27_2020', 'TOTAL', t)), pcF(val('EU27_2020', 'G3000', t))]).reverse()) +
         '<p class="note">Uzależnienie od importu = import netto ÷ zużycie krajowe brutto (Eurostat <a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_ind_id/default/table" rel="noopener">nrg_ind_id</a>, rocznie). Wartość ujemna oznacza eksportera netto, powyżej 100% — import większy od zużycia (np. na zapas). Kraje bez danych pominięto.</p>';
       $('#dep-year').addEventListener('change', (e) => { depYear = e.target.value; draw(); });
       drawChart('g-dep-y', $('#g-dep-y-chart'), {
-        n, markers: n < 40, series: DEP_FUELS.map(([c, nm, col]) => ({ name: nm, color: col, values: years.map((t) => val('PL', c, t)) })),
+        n, markers: n < 40, series: DEP_FUELS.map(([c, nm, col]) => ({ name: nm, color: col, values: years.map((t) => val(GEO, c, t)) })),
         xTicks: years.map((t, i) => ({ i, label: t, at: 'center' })).filter((x) => +x.label % 5 === 0), height: 260, minSpan: 5, yFmt: (v) => `${fmt0.format(v)}%`,
-        label: 'Uzależnienie Polski od importu energii według paliw, rocznie',
-        tooltip: (i, on) => tipRows(years[i] + (years[i] === Y ? ' (wybrany rok)' : ''), [...DEP_FUELS.filter(([, nm]) => on(nm)).map(([c, nm, col]) => ({ name: nm, color: col, value: pcF(val('PL', c, years[i])) })), { name: 'UE-27, cała energia', value: pcF(val('EU27_2020', 'TOTAL', years[i])) }]),
+        label: `Uzależnienie od importu energii według paliw — ${GEO_NAME}, rocznie`,
+        tooltip: (i, on) => tipRows(years[i] + (years[i] === Y ? ' (wybrany rok)' : ''), [...DEP_FUELS.filter(([, nm]) => on(nm)).map(([c, nm, col]) => ({ name: nm, color: col, value: pcF(val(GEO, c, years[i])) })), { name: 'UE-27, cała energia', value: pcF(val('EU27_2020', 'TOTAL', years[i])) }]),
       }, 'dep-y');
     };
     draw();
@@ -505,8 +569,10 @@ function renderAll() {
   }
   const s = slice();
   const g = groups(s);
-  $('#range-label').textContent = `Doby gazowe ${fDay.format(dt(s.days[0]))} – ${fDay.format(dt(s.days[s.n - 1]))} (${s.n} ${plural(s.n, ['doba', 'doby', 'dób'])})`;
-  renderDay(s, g);
+  const nd = sum(s.w);
+  $('#range-label').textContent = `Doby gazowe ${fDay.format(dt(s.spans[0][0]))} – ${fDay.format(dt(s.spans[s.n - 1][1]))} (${nd} ${plural(nd, ['doba', 'doby', 'dób'])})${s.weekly ? ' · wykresy: średnie tygodniowe' : ''}`;
+  const sd = slice(60); // „ostatnia doba” zawsze z danych dobowych
+  renderDay(sd, groups(sd));
   renderPrice(s);
   renderSupply(s, g);
   renderUse(s, g);
@@ -524,10 +590,11 @@ function lastIndex(s, g) {
 function renderDay(s, g) {
   const box = $('#g-day-body');
   const i = lastIndex(s, g);
-  const supply = sum(SUPPLY.map((x) => g[x.id][i]));
+  const SUP = present(SUPPLY, g);
+  const supply = sum(SUP.map((x) => g[x.id][i]));
   const domestic = (g.dist[i] ?? 0) + (g.fc[i] ?? 0);
   const net = (g.ugsIn[i] ?? 0) - (g.ugsOut[i] ?? 0);
-  const rows = SUPPLY.flatMap((x) => (x.parts ? x.parts.map(([id, name]) => ({ name, color: x.color, v: g[id][i] ?? 0 })) : [{ ...x, v: g[x.id][i] ?? 0 }])).filter((x) => x.v >= 0.5).sort((a, b) => b.v - a.v);
+  const rows = SUP.flatMap((x) => (x.parts ? x.parts.map(([id, name]) => ({ name, color: x.color, v: g[id][i] ?? 0 })) : [{ ...x, v: g[x.id][i] ?? 0 }])).filter((x) => x.v >= 0.5).sort((a, b) => b.v - a.v);
   const warn = data.unknown.length
     ? `<p class="warn-box">⚠ W danych ENTSOG są punkty spoza listy obsługiwanych przez stronę — ujęto je jako „Nieprzypisane”: ${data.unknown.map((u) => `${esc(u.label)} (${esc(u.key)}, ${u.dir === 'entry' ? 'wejście' : 'wyjście'}${u.type ? `, ${esc(u.type)}` : ''}, śr. ${gwh(u.avg)}/d)`).join('; ')}.</p>`
     : '';
@@ -560,39 +627,50 @@ async function renderPrice(s) {
   try {
     const { doc, byDay } = await loadPrices();
     // Indeks z danej daty dotyczy dostawy w tej dobie gazowej; oś jak na pozostałych wykresach, ale do ostatniego dnia z ceną.
-    let days = s.days.slice();
-    for (let d = addDays(days[days.length - 1], 1); byDay.has(d); d = addDays(d, 1)) days.push(d);
-    days = days.slice(days.length - s.n);
+    // Przy długich zakresach — średnie tygodniowe (cena ważona wolumenem, wolumen średnio na dobę).
+    let days;
+    let spans;
+    if (s.weekly) {
+      days = s.days;
+      spans = s.spans;
+    } else {
+      days = s.days.slice();
+      for (let d = addDays(days[days.length - 1], 1); byDay.has(d); d = addDays(d, 1)) days.push(d);
+      days = days.slice(days.length - s.n);
+      spans = days.map((d) => [d, d]);
+    }
     const n = days.length;
-    const price = days.map((d) => byDay.get(d)?.price ?? null);
-    const vol = days.map((d) => (byDay.has(d) ? byDay.get(d).volume / 1000 : null)); // GWh
+    const agg = spans.map(([a, b]) => { let pv = 0; let v = 0; let c = 0; for (let d = a; d <= b; d = addDays(d, 1)) { const x = byDay.get(d); if (x) { pv += x.price * x.volume; v += x.volume; c++; } } return c && v ? { price: pv / v, vol: v / c / 1000, v } : null; });
+    const price = agg.map((x) => x?.price ?? null);
+    const vol = agg.map((x) => x?.vol ?? null); // GWh (na dobę)
+    const pLab = (i) => (s.weekly ? lab(s, i) : `dostawa ${fDay.format(dt(days[i]))}`);
     const idx = price.map((v, i) => (v == null ? -1 : i)).filter((i) => i >= 0);
     if (!idx.length) return void (box.innerHTML = empty('Brak cen dla wybranego okresu.'));
-    const last = idx[idx.length - 1];
     const mn = idx.reduce((a, i) => (price[i] < price[a] ? i : a), idx[0]);
     const mx = idx.reduce((a, i) => (price[i] > price[a] ? i : a), idx[0]);
-    const back = byDay.get(addDays(days[last], -30));
-    const ch = back ? ((price[last] - back.price) / back.price) * 100 : null;
+    const lastD = doc.data[doc.data.length - 1]; // ostatnia cena dobowa — kafelki niezależne od agregacji
+    const back = byDay.get(addDays(lastD.day, -30));
+    const ch = back ? ((lastD.price - back.price) / back.price) * 100 : null;
     const zl = (v) => (v == null ? '—' : `${fmt2.format(v)} zł/MWh`);
-    const avgP = sum(idx.map((i) => price[i] * byDay.get(days[i]).volume)) / sum(idx.map((i) => byDay.get(days[i]).volume));
+    const avgP = sum(idx.map((i) => agg[i].price * agg[i].v)) / sum(idx.map((i) => agg[i].v));
     box.innerHTML = staleNote({ what: 'o cenach gazu (TGE/Instrat)', asOf: doc.dataAsOf || doc.data[doc.data.length - 1].day, maxDays: 3, fetched: doc.fetched, stale: doc.stale }) + tilesHtml([
-      { l: `TGEgasDA — dostawa ${fDay.format(dt(days[last]))}`, v: zl(price[last]), d: `${fmt2.format(price[last] / 1000)} zł/kWh · wolumen ${gwh(vol[last])}` },
+      { l: `TGEgasDA — dostawa ${fDay.format(dt(lastD.day))}`, v: zl(lastD.price), d: `${fmt2.format(lastD.price / 1000)} zł/kWh · wolumen ${gwh(lastD.volume / 1000)}` },
       ch == null ? null : { l: 'Zmiana w 30 dni', v: `${ch >= 0 ? '+' : '−'}${fmt0.format(Math.abs(ch))}%`, d: `od ${zl(back.price)}` },
       { l: 'Średnia ważona wolumenem', v: zl(avgP), d: 'w wybranym okresie' },
-      { l: 'Zakres w okresie', v: `${fmt0.format(price[mn])}–${fmt0.format(price[mx])} zł/MWh`, d: `min ${fDM.format(dt(days[mn]))}, maks ${fDM.format(dt(days[mx]))}` },
+      { l: s.weekly ? 'Zakres w okresie (średnie tygodniowe)' : 'Zakres w okresie', v: `${fmt0.format(price[mn])}–${fmt0.format(price[mx])} zł/MWh`, d: `min ${fDM.format(dt(days[mn]))}${s.weekly ? ` ${days[mn].slice(0, 4)}` : ''}, maks ${fDM.format(dt(days[mx]))}${s.weekly ? ` ${days[mx].slice(0, 4)}` : ''}` },
     ]) +
       '<div class="chart" id="g-price-chart"></div><h3 class="sub-h">Wolumen obrotu</h3><div class="chart" id="g-vol-chart"></div>' +
-      table(['Doba dostawy', 'Cena [zł/MWh]', 'Wolumen [MWh]'], idx.map((i) => [days[i], fmt2.format(price[i]), fmt0.format(byDay.get(days[i]).volume)]).reverse()) +
+      table([s.weekly ? 'Tydzień dostawy' : 'Doba dostawy', 'Cena [zł/MWh]', s.weekly ? 'Wolumen [MWh/d]' : 'Wolumen [MWh]'], idx.map((i) => [s.weekly ? tl(s, i) : days[i], fmt2.format(price[i]), fmt0.format(vol[i] * 1000)]).reverse()) +
       `<p class="note">TGEgasDA — średnia ważona wolumenem cena gazu wysokometanowego z dostawą w danej dobie gazowej, z Rynku Dnia Następnego gazu (RDNg). Cena nie obejmuje przesyłu, dystrybucji, akcyzy ani VAT. Dane: <a href="https://tge.pl/gaz-rdn" rel="noopener">Towarowa Giełda Energii</a>, opracowanie: <a href="https://energy.instrat.pl/en/prices/gas-dam/" rel="noopener">Instrat (energy.instrat.pl)</a>, licencja <a href="https://creativecommons.org/licenses/by-nc/4.0/deed.pl" rel="noopener">CC BY-NC 4.0</a>. Pobrano: ${esc(new Date(doc.fetched).toLocaleString('pl-PL'))}.</p>`;
-    const tick = dayTicks(days);
+    const tick = dayTicks(days, s.weekly ? 7 : 1);
     drawChart('g-price', $('#g-price-chart'), {
       n, series: [{ name: 'TGEgasDA', color: 'var(--g-gaz)', values: price }], area: true, zero: false, xTicks: tick, height: 240, minSpan: 7,
       label: 'Cena gazu TGEgasDA, zł/MWh',
-      tooltip: (i) => tipRows(`dostawa ${fDay.format(dt(days[i]))}`, [{ name: 'TGEgasDA', color: 'var(--g-gaz)', value: zl(price[i]) }, { name: 'Wolumen', value: gwh(vol[i]) }]),
+      tooltip: (i) => tipRows(pLab(i), [{ name: 'TGEgasDA', color: 'var(--g-gaz)', value: zl(price[i]) }, { name: 'Wolumen', value: gwh(vol[i]) }]),
     }, 'gas-price');
     drawChart('g-vol', $('#g-vol-chart'), {
       n, bars: true, series: [{ name: 'Wolumen', color: 'var(--ink-2)', values: vol }], xTicks: tick, height: 140, minSpan: 7,
-      label: 'Wolumen obrotu na RDNg, GWh', tooltip: (i) => tipRows(`dostawa ${fDay.format(dt(days[i]))}`, [{ name: 'Wolumen', color: 'var(--ink-2)', value: gwh(vol[i]) }, { name: 'Cena', value: zl(price[i]) }]),
+      label: 'Wolumen obrotu na RDNg, GWh', tooltip: (i) => tipRows(pLab(i), [{ name: 'Wolumen', color: 'var(--ink-2)', value: gwh(vol[i]) }, { name: 'Cena', value: zl(price[i]) }]),
     }, 'gas-price');
   } catch (e) {
     box.innerHTML = empty(`Ceny gazu są niedostępne (${esc(e.message || e)}). Plik data/gas-prices.json tworzy skrypt scripts/fetch_data.py.`);
@@ -605,71 +683,74 @@ function tipFor(s, list, g, i, on, total) {
     ...(x.parts || []).map(([id, name]) => ({ name: `– ${name}`, value: gwh(g[id][i]) })),
   ]);
   if (total) rows.push({ name: total, value: gwh(sum(list.map((x) => g[x.id][i]))) });
-  return tipRows(gasDay(s.days[i]), rows);
+  return tipRows(lab(s, i), rows);
 }
 
 function renderSupply(s, g) {
   const box = $('#g-supply-body');
-  const total = s.days.map((_, i) => sum(SUPPLY.map((x) => g[x.id][i])));
-  const share = (id) => { const t = sum(total); return t ? (sum(g[id]) / t) * 100 : null; };
-  const tiles = SUPPLY.filter((x) => x.id !== 'ugsOut').flatMap((x) => (x.parts ? x.parts.map(([id, name]) => ({ id, name })) : [x]));
-  box.innerHTML = tilesHtml(tiles.map((x) => ({ l: x.name, v: pct(share(x.id)), d: `${fmt2.format(sum(g[x.id]) / 1000)} TWh · śr. ${gwh(avgOf(g[x.id]))}/d` }))) +
+  const SUP = present(SUPPLY, g);
+  const total = s.days.map((_, i) => sum(SUP.map((x) => g[x.id][i])));
+  const share = (id) => { const t = esum(total, s); return t ? (esum(g[id], s) / t) * 100 : null; };
+  const tiles = SUP.filter((x) => x.id !== 'ugsOut').flatMap((x) => (x.parts ? x.parts.map(([id, name]) => ({ id, name })) : [x]));
+  box.innerHTML = tilesHtml(tiles.map((x) => ({ l: x.name, v: pct(share(x.id)), d: `${fmt2.format(esum(g[x.id], s) / 1000)} TWh · śr. ${gwh(avgOf(g[x.id]))}/d` }))) +
     '<div class="chart" id="g-supply-chart"></div>' +
-    table(['Doba gazowa', ...tiles.map((x) => x.name + ' [GWh]'), 'Odbiór z magazynów [GWh]', 'Razem'], s.days.map((d, i) => [d, ...[...tiles, { id: 'ugsOut' }].map((x) => (g[x.id][i] == null ? '—' : fmt0.format(g[x.id][i]))), fmt0.format(total[i])]).reverse()) +
-    '<p class="note">Udziały w całym wybranym okresie. Wydobycie krajowe obejmuje gaz przetworzony w odazotowniach. Import z Ukrainy jest niewielki, dlatego na wykresie tworzy jedną warstwę ze Słowacją; w dymku, kafelkach i tabeli jest osobno. Kierunki z eksportem — w sekcji „Wymiana z sąsiadami”.</p>';
+    table([hdr(s), ...tiles.map((x) => x.name + ' [GWh]'), 'Odbiór z magazynów [GWh]', 'Razem'], s.days.map((d, i) => [tl(s, i), ...[...tiles, { id: 'ugsOut' }].map((x) => (g[x.id][i] == null ? '—' : fmt0.format(g[x.id][i]))), fmt0.format(total[i])]).reverse()) +
+    '<p class="note">Udziały w całym wybranym okresie. Wydobycie krajowe obejmuje gaz przetworzony w odazotowniach. Import z Ukrainy jest niewielki, dlatego na wykresie tworzy jedną warstwę ze Słowacją; w dymku, kafelkach i tabeli jest osobno. Kierunki z eksportem — w sekcji „Wymiana z sąsiadami”. W zakresach sprzed maja 2022 pojawia się import z Białorusi (gaz rosyjski, m.in. gazociągiem jamalskim; jego tranzyt do Niemiec widać jako eksport przez Mallnow).</p>';
   drawChart('g-supply', $('#g-supply-chart'), {
-    n: s.n, stacked: true, series: SUPPLY.map((x) => ({ name: x.name, color: x.color, values: g[x.id] })), xTicks: dayTicks(s.days), height: 300, minSpan: 7,
+    n: s.n, stacked: true, series: SUP.map((x) => ({ name: x.name, color: x.color, values: g[x.id] })), xTicks: dayTicks(s.days, s.weekly ? 7 : 1), height: 300, minSpan: 7,
     yFmt: (v) => `${fmt0.format(v)}`, label: 'Dostawy gazu do systemu przesyłowego według źródeł, GWh na dobę',
-    tooltip: (i, on) => tipFor(s, SUPPLY, g, i, on, 'Razem'),
+    tooltip: (i, on) => tipFor(s, SUP, g, i, on, 'Razem'),
   }, 'gas');
 }
 
 function renderUse(s, g) {
   const box = $('#g-use-body');
-  const inSum = s.days.map((_, i) => sum(SUPPLY.map((x) => g[x.id][i])));
-  const outSum = s.days.map((_, i) => sum(USE.map((x) => g[x.id][i])));
+  const SUP = present(SUPPLY, g);
+  const US = present(USE, g);
+  const inSum = s.days.map((_, i) => sum(SUP.map((x) => g[x.id][i])));
+  const outSum = s.days.map((_, i) => sum(US.map((x) => g[x.id][i])));
   const diff = inSum.map((v, i) => v - outSum[i]);
   const peak = outSum.reduce((a, v, i) => (v > outSum[a] ? i : a), 0);
   const cons = s.days.map((_, i) => (g.dist[i] ?? 0) + (g.fc[i] ?? 0));
   box.innerHTML = tilesHtml([
-    { l: 'Średnie zużycie krajowe', v: `${gwh(avgOf(cons))}/d`, d: `łącznie ${fmt2.format(sum(cons) / 1000)} TWh w okresie` },
-    { l: 'Największy odbiór', v: gwh(outSum[peak]), d: fDay.format(dt(s.days[peak])) },
-    { l: 'Eksport w okresie', v: `${fmt2.format(sum(g.exp) / 1000)} TWh`, d: `śr. ${gwh(avgOf(g.exp))}/d` },
+    { l: 'Średnie zużycie krajowe', v: `${gwh(avgOf(cons))}/d`, d: `łącznie ${fmt2.format(esum(cons, s) / 1000)} TWh w okresie` },
+    { l: 'Największy odbiór', v: `${gwh(outSum[peak])}${s.weekly ? '/d' : ''}`, d: s.weekly ? lab(s, peak) : fDay.format(dt(s.days[peak])) },
+    { l: 'Eksport w okresie', v: `${fmt2.format(esum(g.exp, s) / 1000)} TWh`, d: `śr. ${gwh(avgOf(g.exp))}/d` },
   ]) +
     '<div class="chart" id="g-use-chart"></div>' +
     '<h3 class="sub-h">Wejścia − wyjścia</h3><div class="chart" id="g-diff-chart"></div>' +
-    table(['Doba gazowa', ...USE.map((x) => x.name + ' [GWh]'), 'Wejścia − wyjścia'], s.days.map((d, i) => [d, ...USE.map((x) => (g[x.id][i] == null ? '—' : fmt0.format(g[x.id][i]))), fmt0.format(diff[i])]).reverse()) +
+    table([hdr(s), ...US.map((x) => x.name + ' [GWh]'), 'Wejścia − wyjścia'], s.days.map((d, i) => [tl(s, i), ...US.map((x) => (g[x.id][i] == null ? '—' : fmt0.format(g[x.id][i]))), fmt0.format(diff[i])]).reverse()) +
     '<p class="note">„Odbiorcy przyłączeni do przesyłu” to duże zakłady i elektrownie zasilane bezpośrednio z gazociągów GAZ-SYSTEM; pozostali odbiorcy (gospodarstwa domowe, firmy, ciepłownie) są za sieciami dystrybucyjnymi. Różnica wejść i wyjść to głównie zmiana ilości gazu w samych gazociągach (akumulacja) i niedokładności pomiarów — zwykle kilka procent obrotu.</p>';
   drawChart('g-use', $('#g-use-chart'), {
-    n: s.n, stacked: true, series: USE.map((x) => ({ name: x.name, color: x.color, values: g[x.id] })), xTicks: dayTicks(s.days), height: 300, minSpan: 7,
-    label: 'Odbiór gazu z systemu przesyłowego, GWh na dobę', tooltip: (i, on) => tipFor(s, USE, g, i, on, 'Razem'),
+    n: s.n, stacked: true, series: US.map((x) => ({ name: x.name, color: x.color, values: g[x.id] })), xTicks: dayTicks(s.days, s.weekly ? 7 : 1), height: 300, minSpan: 7,
+    label: 'Odbiór gazu z systemu przesyłowego, GWh na dobę', tooltip: (i, on) => tipFor(s, US, g, i, on, 'Razem'),
   }, 'gas');
   drawChart('g-diff', $('#g-diff-chart'), {
-    n: s.n, bars: true, barColor: () => 'var(--ink-2)', series: [{ name: 'Wejścia − wyjścia', color: 'var(--ink-2)', values: diff }], xTicks: dayTicks(s.days), height: 160, minSpan: 7,
+    n: s.n, bars: true, barColor: () => 'var(--ink-2)', series: [{ name: 'Wejścia − wyjścia', color: 'var(--ink-2)', values: diff }], xTicks: dayTicks(s.days, s.weekly ? 7 : 1), height: 160, minSpan: 7,
     label: 'Różnica wejść i wyjść, GWh na dobę',
-    tooltip: (i) => tipRows(gasDay(s.days[i]), [{ name: 'Wejścia', value: gwh(inSum[i]) }, { name: 'Wyjścia', value: gwh(outSum[i]) }, { name: 'Różnica', color: 'var(--ink-2)', value: gwh(diff[i]) }]),
+    tooltip: (i) => tipRows(lab(s, i), [{ name: 'Wejścia', value: gwh(inSum[i]) }, { name: 'Wyjścia', value: gwh(outSum[i]) }, { name: 'Różnica', color: 'var(--ink-2)', value: gwh(diff[i]) }]),
   }, 'gas');
 }
 
 function renderBorders(s) {
   const box = $('#g-borders-body');
   const add = (pts) => s.days.map((_, i) => { let t = null; for (const [k, d] of pts) { const v = s.f(k, d)[i]; if (v != null) t = (t ?? 0) + v; } return t; });
-  const bs = BORDERS.map((b) => {
+  const bs = BORDERS.filter((b) => [...b.imp, ...b.exp].some(([k, d]) => s.f(k, d).some((v) => (v ?? 0) > 0.05))).map((b) => {
     const imp = add(b.imp);
     const exp = add(b.exp);
     const net = imp.map((v, i) => (v == null && exp[i] == null ? null : (v ?? 0) - (exp[i] ?? 0)));
-    return { ...b, imp, exp, net, impT: sum(imp) / 1000, expT: sum(exp) / 1000 };
+    return { ...b, imp, exp, net, impT: esum(imp, s) / 1000, expT: esum(exp, s) / 1000 };
   });
   const twh = (v) => `${fmt2.format(v)} TWh`;
   const sign = (v) => `${v >= 0 ? '+' : '−'}${gwh(Math.abs(v))}`;
   box.innerHTML = `<div class="legend"><span class="key"><i class="sw" style="background:var(--imp)"></i>import do Polski (+)</span><span class="key"><i class="sw" style="background:var(--exp)"></i>eksport z Polski (−)</span></div>
     <div class="smalls">${bs.map((b, k) => `<div class="small"><h3 class="sub-h">${b.name}</h3><p class="muted small-sum">import ${twh(b.impT)} · eksport ${twh(b.expT)}</p><div class="chart" id="g-border-${k}"></div></div>`).join('')}</div>` +
-    table(['Doba gazowa', ...bs.flatMap((b) => [`${b.name}: import [GWh]`, 'eksport [GWh]'])], s.days.map((d, i) => [d, ...bs.flatMap((b) => [b.imp[i] == null ? '—' : fmt0.format(b.imp[i]), b.exp[i] == null ? '—' : fmt0.format(b.exp[i])])]).reverse()) +
+    table([hdr(s), ...bs.flatMap((b) => [`${b.name}: import [GWh]`, 'eksport [GWh]'])], s.days.map((d, i) => [tl(s, i), ...bs.flatMap((b) => [b.imp[i] == null ? '—' : fmt0.format(b.imp[i]), b.exp[i] == null ? '—' : fmt0.format(b.exp[i])])]).reverse()) +
     '<p class="note">Przepływy fizyczne w punktach na granicach (saldo doby: import − eksport). Każdy wykres ma własną skalę. Baltic Pipe dostarcza gaz z Norwegii przez Danię; Niemcy to punkt GCP (Lasów) i rewers gazociągu jamalskiego w Mallnow.</p>';
   bs.forEach((b, k) => drawChart(`g-border-${k}`, $(`#g-border-${k}`), {
     n: s.n, bars: true, barColor: (v) => (v >= 0 ? 'var(--imp)' : 'var(--exp)'), series: [{ name: b.name, color: 'var(--imp)', values: b.net }], legend: false,
-    xTicks: dayTicks(s.days), height: 150, minSpan: 7, label: `Wymiana gazu z krajem: ${b.name}, GWh na dobę`,
-    tooltip: (i) => tipRows(`${b.name} — ${gasDay(s.days[i])}`, [{ name: 'Import', color: 'var(--imp)', value: gwh(b.imp[i]) }, { name: 'Eksport', color: 'var(--exp)', value: gwh(b.exp[i]) }, { name: 'Saldo', value: b.net[i] == null ? '—' : sign(b.net[i]) }]),
+    xTicks: dayTicks(s.days, s.weekly ? 7 : 1), height: 150, minSpan: 7, label: `Wymiana gazu z krajem: ${b.name}, GWh na dobę`,
+    tooltip: (i) => tipRows(`${b.name} — ${lab(s, i)}`, [{ name: 'Import', color: 'var(--imp)', value: gwh(b.imp[i]) }, { name: 'Eksport', color: 'var(--exp)', value: gwh(b.exp[i]) }, { name: 'Saldo', value: b.net[i] == null ? '—' : sign(b.net[i]) }]),
   }, 'gas'));
 }
 
@@ -678,33 +759,33 @@ function renderStore(s) {
   const per = STORAGES.map((st) => ({ ...st, out: s.f(st.key, 'entry'), in: s.f(st.key, 'exit') }));
   const net = s.days.map((_, i) => sum(per.map((p) => (p.in[i] ?? 0) - (p.out[i] ?? 0)))); // + zatłaczanie, − odbiór
   const cum = [];
-  net.reduce((a, v, i) => (cum[i] = a + v / 1000), 0);
-  const inT = sum(per.map((p) => sum(p.in))) / 1000;
-  const outT = sum(per.map((p) => sum(p.out))) / 1000;
+  net.reduce((a, v, i) => (cum[i] = a + (v * s.w[i]) / 1000), 0);
+  const inT = sum(per.map((p) => esum(p.in, s))) / 1000;
+  const outT = sum(per.map((p) => esum(p.out, s))) / 1000;
   const last = net.length - 1;
   box.innerHTML = tilesHtml([
     { l: 'Zatłoczono w okresie', v: `${fmt2.format(inT)} TWh` },
     { l: 'Odebrano w okresie', v: `${fmt2.format(outT)} TWh` },
     { l: 'Zmiana zapasu', v: `${inT - outT >= 0 ? '+' : '−'}${fmt2.format(Math.abs(inT - outT))} TWh`, d: 'od początku wybranego okresu' },
-    { l: `Ostatnia doba (${fDM.format(dt(s.days[last]))})`, v: net[last] >= 0 ? `+${gwh(net[last])}` : `−${gwh(-net[last])}`, d: net[last] >= 0 ? 'zatłaczanie' : 'odbiór' },
+    { l: s.weekly ? 'Ostatni tydzień, średnio na dobę' : `Ostatnia doba (${fDM.format(dt(s.days[last]))})`, v: net[last] >= 0 ? `+${gwh(net[last])}` : `−${gwh(-net[last])}`, d: net[last] >= 0 ? 'zatłaczanie' : 'odbiór' },
   ]) +
     '<div class="chart" id="g-store-chart"></div>' +
     '<h3 class="sub-h">Zmiana zapasu od początku okresu</h3><div class="chart" id="g-cum-chart"></div>' +
-    table(['Doba gazowa', ...per.flatMap((p) => [`${p.name}: zatł. [GWh]`, 'odbiór [GWh]']), 'Netto [GWh]'], s.days.map((d, i) => [d, ...per.flatMap((p) => [p.in[i] == null ? '—' : fmt0.format(p.in[i]), p.out[i] == null ? '—' : fmt0.format(p.out[i])]), fmt0.format(net[i])]).reverse()) +
+    table([hdr(s), ...per.flatMap((p) => [`${p.name}: zatł. [GWh]`, 'odbiór [GWh]']), 'Netto [GWh]'], s.days.map((d, i) => [tl(s, i), ...per.flatMap((p) => [p.in[i] == null ? '—' : fmt0.format(p.in[i]), p.out[i] == null ? '—' : fmt0.format(p.out[i])]), fmt0.format(net[i])]).reverse()) +
     '<p class="note">Przepływy między systemem przesyłowym a magazynami (dane ENTSOG). Poziomu zapełnienia magazynów nie da się pobrać bez klucza API (GIE AGSI+), dlatego pokazujemy zmianę zapasu w wybranym okresie.</p>';
   drawChart('g-store', $('#g-store-chart'), {
-    n: s.n, bars: true, barColor: (v) => (v >= 0 ? 'var(--s2)' : 'var(--s1)'), series: [{ name: 'Magazyny netto', color: 'var(--s2)', values: net }], xTicks: dayTicks(s.days), height: 220, minSpan: 7,
+    n: s.n, bars: true, barColor: (v) => (v >= 0 ? 'var(--s2)' : 'var(--s1)'), series: [{ name: 'Magazyny netto', color: 'var(--s2)', values: net }], xTicks: dayTicks(s.days, s.weekly ? 7 : 1), height: 220, minSpan: 7,
     legend: false, legendExtra: '<span class="key"><i class="sw" style="background:var(--s2)"></i>zatłaczanie (+)</span><span class="key"><i class="sw" style="background:var(--s1)"></i>odbiór (−)</span>',
     label: 'Saldo magazynów gazu, GWh na dobę',
-    tooltip: (i) => tipRows(gasDay(s.days[i]), [
+    tooltip: (i) => tipRows(lab(s, i), [
       ...per.filter((p) => (p.in[i] ?? 0) + (p.out[i] ?? 0) > 0.05).map((p) => ({ name: p.name, value: `${(p.in[i] ?? 0) - (p.out[i] ?? 0) >= 0 ? '+' : '−'}${gwh(Math.abs((p.in[i] ?? 0) - (p.out[i] ?? 0)))}` })),
       { name: 'Razem', color: net[i] >= 0 ? 'var(--s2)' : 'var(--s1)', value: `${net[i] >= 0 ? '+' : '−'}${gwh(Math.abs(net[i]))}` },
     ]),
   }, 'gas');
   drawChart('g-cum', $('#g-cum-chart'), {
-    n: s.n, series: [{ name: 'Zmiana zapasu', color: 'var(--s2)', values: cum }], area: true, xTicks: dayTicks(s.days), height: 200, minSpan: 7,
+    n: s.n, series: [{ name: 'Zmiana zapasu', color: 'var(--s2)', values: cum }], area: true, xTicks: dayTicks(s.days, s.weekly ? 7 : 1), height: 200, minSpan: 7,
     yFmt: (v) => `${fmt0.format(v)} TWh`, label: 'Skumulowana zmiana zapasu w magazynach, TWh',
-    tooltip: (i) => tipRows(gasDay(s.days[i]), [{ name: 'Zmiana od początku okresu', color: 'var(--s2)', value: `${cum[i] >= 0 ? '+' : '−'}${fmt2.format(Math.abs(cum[i]))} TWh` }]),
+    tooltip: (i) => tipRows(lab(s, i), [{ name: 'Zmiana od początku okresu', color: 'var(--s2)', value: `${cum[i] >= 0 ? '+' : '−'}${fmt2.format(Math.abs(cum[i]))} TWh` }]),
   }, 'gas');
 }
 
@@ -722,7 +803,7 @@ function renderPoints(s) {
   box.innerHTML = `<div class="legend"><span class="key"><i class="sw" style="background:var(--ink-2)"></i>średnie wykorzystanie w okresie</span><span class="key"><i class="plan-key"></i>maksimum w okresie</span></div>
     <div class="util">${pts
       .map((p) => `<div class="urow"><div class="uname"><i class="sw" style="background:${p.color}"></i>${p.name}<span class="muted"> · ${fmt0.format(p.lastCap)} GWh/d</span></div>
-        <div class="utrack"><span class="ubar" style="width:${Math.min(100, p.avg ?? 0)}%;background:${p.color}"></span>${p.max != null ? `<span class="umax" style="left:${Math.min(100, p.max)}%" title="Maksimum: ${pct(p.max)} (${fDay.format(dt(s.days[p.maxI]))})"></span>` : ''}</div>
+        <div class="utrack"><span class="ubar" style="width:${Math.min(100, p.avg ?? 0)}%;background:${p.color}"></span>${p.max != null ? `<span class="umax" style="left:${Math.min(100, p.max)}%" title="Maksimum: ${pct(p.max)} (${esc(lab(s, p.maxI))})"></span>` : ''}</div>
         <div class="uval">śr. <b>${pct(p.avg)}</b> <span class="muted">maks. ${pct(p.max)} · ostatnio ${pct(p.last)}</span></div></div>`)
       .join('')}</div>
     <h3 class="sub-h">Wykorzystanie głównych punktów wejścia</h3><div class="chart" id="g-points-chart"></div>` +
@@ -730,9 +811,9 @@ function renderPoints(s) {
     '<p class="note">Wykorzystanie = przepływ fizyczny ÷ moc techniczna ciągła (firm technical capacity) publikowana przez GAZ-SYSTEM w ENTSOG na daną dobę. Pominięto punkty bez przepływu w wybranym okresie. Magazyny: moc zatłaczania i odbioru zależy od stopnia napełnienia, a publikowana wartość jest maksymalna.</p>';
   const lines = pts.filter((p) => p.line);
   drawChart('g-points', $('#g-points-chart'), {
-    n: s.n, series: lines.map((p) => ({ name: p.name, color: p.color, values: p.u })), xTicks: dayTicks(s.days), height: 260, minSpan: 7,
+    n: s.n, series: lines.map((p) => ({ name: p.name, color: p.color, values: p.u })), xTicks: dayTicks(s.days, s.weekly ? 7 : 1), height: 260, minSpan: 7,
     yFmt: (v) => `${fmt0.format(v)}%`, label: 'Wykorzystanie mocy technicznej głównych punktów wejścia',
-    tooltip: (i, on) => tipRows(gasDay(s.days[i]), lines.filter((p) => on(p.name)).map((p) => ({ name: p.name, color: p.color, value: p.u[i] == null ? '—' : `${pct(p.u[i])} · ${gwh(p.f[i])} z ${gwh(p.c[i])}` }))),
+    tooltip: (i, on) => tipRows(lab(s, i), lines.filter((p) => on(p.name)).map((p) => ({ name: p.name, color: p.color, value: p.u[i] == null ? '—' : `${pct(p.u[i])} · ${gwh(p.f[i])} z ${gwh(p.c[i])}` }))),
   }, 'gas');
 }
 
@@ -741,10 +822,13 @@ async function renderPower(s) {
   try {
     if (!power) {
       box.innerHTML = empty('Ładowanie…');
-      power = await loadPower(data.days[0]);
+      power = loadPower(data.days[0]);
     }
-    const gz = s.days.map((d) => power.get(d)?.gz ?? null);
-    const gk = s.days.map((d) => power.get(d)?.gk ?? null);
+    const pw = await power;
+    // Średnia dobowa w przedziale (doba albo tydzień).
+    const perB = (fn) => s.spans.map(([a, b]) => { let t = 0; let c = 0; for (let d = a; d <= b; d = addDays(d, 1)) { const v = fn(d); if (v != null) { t += v; c++; } } return c ? t / c : null; });
+    const gz = perB((d) => pw.get(d)?.gz ?? null);
+    const gk = perB((d) => pw.get(d)?.gk ?? null);
     const tot = gz.map((v, i) => (v == null && gk[i] == null ? null : (v ?? 0) + (gk[i] ?? 0)));
     const idx = tot.map((v, i) => (v == null ? -1 : i)).filter((i) => i >= 0);
     if (!idx.length) return void (box.innerHTML = empty('Brak danych PSE dla wybranego okresu.'));
@@ -752,16 +836,16 @@ async function renderPower(s) {
     const lastI = idx[idx.length - 1];
     box.innerHTML = tilesHtml([
       { l: 'Średnio na dobę', v: `${fmt2.format(avgOf(tot))} GWh`, d: `≈ ${fmt0.format((avgOf(tot) * 1000) / 24)} MW średniej mocy` },
-      { l: 'Najwięcej', v: `${fmt2.format(tot[mx])} GWh`, d: fDay.format(dt(s.days[mx])) },
-      { l: `Ostatni pełny dzień (${fDM.format(dt(s.days[lastI]))})`, v: `${fmt2.format(tot[lastI])} GWh`, d: `w tym gaz koksowniczy ${fmt2.format(gk[lastI] ?? 0)} GWh` },
+      { l: s.weekly ? 'Najwięcej (tydzień, średnio na dobę)' : 'Najwięcej', v: `${fmt2.format(tot[mx])} GWh`, d: s.weekly ? lab(s, mx) : fDay.format(dt(s.days[mx])) },
+      { l: s.weekly ? 'Ostatni tydzień, średnio na dobę' : `Ostatni pełny dzień (${fDM.format(dt(s.days[lastI]))})`, v: `${fmt2.format(tot[lastI])} GWh`, d: `w tym gaz koksowniczy ${fmt2.format(gk[lastI] ?? 0)} GWh` },
     ]) +
       '<div class="chart" id="g-power-chart"></div>' +
-      table(['Dzień', 'Gaz ziemny [GWh]', 'Gaz koksowniczy [GWh]', 'Razem [GWh]'], idx.map((i) => [s.days[i], fmt2.format(gz[i] ?? 0), fmt2.format(gk[i] ?? 0), fmt2.format(tot[i])]).reverse()) +
-      '<p class="note">Energia elektryczna wyprodukowana z gazu według PSE (his-gen-pal-sire, kody GZ i GK), w dobach kalendarzowych (0:00–24:00), a nie gazowych. To energia elektryczna — zużycie gazu przez elektrownie jest mniej więcej dwukrotnie większe (sprawność bloków gazowych ok. 40–60%, część zużycia to też ciepło z elektrociepłowni).</p>';
+      table([s.weekly ? 'Tydzień (średnio na dobę)' : 'Dzień', 'Gaz ziemny [GWh]', 'Gaz koksowniczy [GWh]', 'Razem [GWh]'], idx.map((i) => [tl(s, i), fmt2.format(gz[i] ?? 0), fmt2.format(gk[i] ?? 0), fmt2.format(tot[i])]).reverse()) +
+      `<p class="note">Energia elektryczna wyprodukowana z gazu według PSE (his-gen-pal-sire, kody GZ i GK), w dobach kalendarzowych (0:00–24:00), a nie gazowych. Dane dostępne od ${fDay.format(dt(PSE_SINCE))} (od tej daty sięga historia nowego API PSE). To energia elektryczna — zużycie gazu przez elektrownie jest mniej więcej dwukrotnie większe (sprawność bloków gazowych ok. 40–60%, część zużycia to też ciepło z elektrociepłowni).</p>`;
     drawChart('g-power', $('#g-power-chart'), {
-      n: s.n, bars: true, series: [{ name: 'Energia elektryczna z gazu', color: 'var(--g-gaz)', values: tot }], xTicks: dayTicks(s.days), height: 220, minSpan: 7,
+      n: s.n, bars: true, series: [{ name: 'Energia elektryczna z gazu', color: 'var(--g-gaz)', values: tot }], xTicks: dayTicks(s.days, s.weekly ? 7 : 1), height: 220, minSpan: 7,
       label: 'Produkcja energii elektrycznej z gazu, GWh na dobę',
-      tooltip: (i) => tipRows(fDay.format(dt(s.days[i])), [{ name: 'Gaz ziemny', color: 'var(--g-gaz)', value: gz[i] == null ? '—' : `${fmt2.format(gz[i])} GWh` }, { name: 'Gaz koksowniczy', value: gk[i] == null ? '—' : `${fmt2.format(gk[i])} GWh` }]),
+      tooltip: (i) => tipRows(s.weekly ? lab(s, i) : fDay.format(dt(s.days[i])), [{ name: 'Gaz ziemny', color: 'var(--g-gaz)', value: gz[i] == null ? '—' : `${fmt2.format(gz[i])} GWh` }, { name: 'Gaz koksowniczy', value: gk[i] == null ? '—' : `${fmt2.format(gk[i])} GWh` }]),
     }, 'gas');
   } catch (e) {
     box.innerHTML = errorBox(e);
@@ -771,21 +855,35 @@ async function renderPower(s) {
 // ---------- Start ----------
 initTheme();
 initInstall();
+initCountry();
 $('#range').innerHTML = `<div class="seg" role="group" aria-label="Zakres">${Object.entries(RANGES).map(([r, l]) => `<button type="button" data-r="${r}">${l}</button>`).join('')}</div>`;
-$('#range').addEventListener('click', (e) => {
+$('#range').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-r]');
   if (!b || !data) return;
   range = +b.dataset.r;
   try { localStorage.setItem('gasRange', range); } catch { /* j.w. */ }
+  if (range > data.historyDays) {
+    // Dłuższa historia: dociągamy ENTSOG (porcjami po roku) i od nowa dane PSE.
+    document.querySelectorAll('#range .seg button').forEach((x) => x.classList.toggle('on', x === b));
+    $('#range-label').textContent = 'Ładowanie dłuższej historii…';
+    try {
+      applyData(await loadData(Math.min(MAX_HISTORY, range)));
+      power = null;
+    } catch (err) {
+      $('#range-label').textContent = `Nie udało się pobrać dłuższej historii (${err.message || err}).`;
+      return;
+    }
+  }
   renderAll();
 });
+function applyData(d) {
+  data = d;
+  if (d.unknown.some((u) => u.dir === 'entry') && !SUPPLY.includes(UNK_IN)) SUPPLY.push(UNK_IN);
+  if (d.unknown.some((u) => u.dir === 'exit') && !USE.includes(UNK_OUT)) USE.push(UNK_OUT);
+}
 
 // Dane ENTSOG pobieramy zawsze (potrzebne też w zakładce miesięcznej); Eurostat — dopiero po otwarciu zakładki.
-const dataReady = loadData().then((d) => {
-  data = d;
-  if (d.unknown.some((u) => u.dir === 'entry')) SUPPLY.push(UNK_IN);
-  if (d.unknown.some((u) => u.dir === 'exit')) USE.push(UNK_OUT);
-});
+const dataReady = loadData(Math.max(370, Math.min(MAX_HISTORY, range))).then(applyData);
 initTabs({
   d: () => dataReady.then(renderAll, (e) => { for (const id of SECTIONS) $(`#${id}-body`).innerHTML = errorBox(e); }),
   m: () => { renderUsesMonthly(); renderDepMonthly(); },

@@ -283,3 +283,30 @@ export function staleNote({ what, asOf, maxDays, fetched, fetchedMaxHours = 30, 
   if (stale) msgs.push(`ostatnia próba odświeżenia danych ${what} nie powiodła się — pokazujemy poprzednią kopię`);
   return msgs.length ? `<p class="warn-box">⚠ ${esc(msgs.join('; '))}.</p>` : '';
 }
+
+// ---------- Kraj dla sekcji Eurostatu (zakładki „Miesięczne” i „Roczne”) ----------
+// ?kraj=FR w adresie albo zapamiętany wybór; dane dzienne (PSE, ENTSOG) dotyczą zawsze Polski.
+export const GEO = (() => {
+  let g = (new URLSearchParams(location.search).get('kraj') || '').toUpperCase();
+  if (!EU_NAMES[g] || g === 'EU27_2020') { try { g = localStorage.getItem('geo') || 'PL'; } catch { g = 'PL'; } }
+  return EU_NAMES[g] && g !== 'EU27_2020' ? g : 'PL';
+})();
+export const GEO_NAME = EU_NAMES[GEO];
+// Ceny: Polska w złotych (waluta krajowa w Eurostacie), pozostałe kraje w euro.
+export const CUR = GEO === 'PL' ? 'NAC' : 'EUR';
+export const CUR_SYM = GEO === 'PL' ? 'zł' : '€';
+export function initCountry() {
+  const box = $('#country');
+  if (!box) return;
+  const names = Object.entries(EU_NAMES).filter(([c]) => c !== 'EU27_2020').sort((a, b) => a[1].localeCompare(b[1], 'pl'));
+  box.innerHTML = `<label class="year-sel">Kraj: <select id="country-sel">${names.map(([c, n]) => `<option value="${c}"${c === GEO ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
+    <span class="muted country-note">dotyczy danych Eurostatu w tej zakładce; dane dzienne są tylko dla Polski</span>`;
+  $('#country-sel').addEventListener('change', (e) => {
+    const g = e.target.value;
+    try { localStorage.setItem('geo', g); } catch { /* brak localStorage */ }
+    const url = new URL(location.href);
+    if (g === 'PL') url.searchParams.delete('kraj');
+    else url.searchParams.set('kraj', g);
+    location.href = url; // przeładowanie: każda sekcja pobiera dane nowego kraju od zera
+  });
+}
