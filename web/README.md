@@ -123,3 +123,12 @@ Suma wejść − suma wyjść to kilka–kilkadziesiąt GWh/d (akumulacja w gazo
 Instrat, licencja CC BY-NC 4.0 (użycie informacyjne dozwolone, wymagane podanie źródła, bez celów komercyjnych). API ma CORS tylko dla
 energy.instrat.pl, dlatego `scripts/fetch_data.py` zapisuje `web/data/gas-prices.json` podczas wdrożenia (GitHub Actions).
 Endpoint `gas_price_rtt` (kontrakty terminowe) zwraca obecnie pustą listę.
+
+### Na co idzie gaz — Eurostat (CORS `*`, CC BY 4.0, bez klucza)
+- `nrg_cb_gasm?geo=PL&siec=G3000&unit=TJ_GCV&nrg_bal=IC_OBS&nrg_bal=TI_EHG_MAP` — miesięcznie: zużycie krajowe i wsad do
+  energetyki zawodowej, **ciepło spalania**, opóźnienie ok. 1 miesiąca.
+- `nrg_bal_c?geo=PL&siec=G3000&unit=GWH` — rocznie pełny bilans (gospodarstwa, przemysł wg branż, elektrociepłownie zawodowe
+  i przemysłowe, produkcja prądu `GEP` i ciepła `GHP` z gazu), **wartość opałowa**, opóźnienie ponad rok.
+- Suma miesięcy za 2024 (219,6 TWh GCV) vs bilans roczny (197,3 TWh NCV) — różnica to przelicznik GCV/NCV ≈ 1,11.
+  `TI_EHG_MAP` miesięcznie (29,3 TWh GCV w 2024) jest niższe niż suma zawodowych pozycji rocznych (32,3 TWh NCV) — inna sprawozdawczość.
+- `TI_NRG_FC_IND_NE` = `FC_NE` (agregat) — nie sumować podwójnie.

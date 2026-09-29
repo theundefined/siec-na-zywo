@@ -234,8 +234,143 @@ function groups(s) {
   return g;
 }
 
+// ---------- Eurostat: bilanse gazu (oficjalna sprawozdawczość krajowa, CORS *, licencja CC BY 4.0) ----------
+const EUROSTAT = 'https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data';
+async function eurostat(dataset, params) {
+  const q = new URLSearchParams({ geo: 'PL', siec: 'G3000', lang: 'en' });
+  for (const [k, v] of Object.entries(params)) for (const x of [].concat(v)) q.append(k, x);
+  const r = await fetch(`${EUROSTAT}/${dataset}?${q}`);
+  if (!r.ok) throw new Error(`Eurostat: HTTP ${r.status}`);
+  const d = await r.json();
+  // JSON-stat: wartości w płaskiej tablicy indeksowanej iloczynem wymiarów.
+  const stride = d.size.map((_, i) => d.size.slice(i + 1).reduce((a, b) => a * b, 1));
+  const pos = (dim, code) => d.dimension[dim].category.index[code];
+  const get = (sel) => {
+    let k = 0;
+    for (const [i, dim] of d.id.entries()) {
+      const p = sel[dim] != null ? pos(dim, sel[dim]) : 0;
+      if (p == null) return null;
+      k += p * stride[i];
+    }
+    return d.value[k] ?? null;
+  };
+  const times = Object.keys(d.dimension.time.category.index).sort();
+  return { get, times, updated: d.updated };
+}
+
+// Roczny bilans (nrg_bal_c, GWh): na co zużyto gaz. Grupy sumują się do zużycia krajowego brutto (GIC) z różnicami statystycznymi.
+const USE_GROUPS = [
+  { head: 'Produkcja prądu i ciepła', rows: [
+    ['TI_EHG_MAPCHP_E', 'Elektrociepłownie zawodowe'],
+    ['TI_EHG_APCHP_E', 'Elektrociepłownie przemysłowe'],
+    ['TI_EHG_MAPE_E', 'Elektrownie zawodowe (tylko prąd)'],
+    ['TI_EHG_MAPH_E', 'Ciepłownie zawodowe'],
+    ['TI_EHG_APH_E', 'Ciepłownie przemysłowe'],
+  ] },
+  { head: 'Odbiorcy końcowi', rows: [
+    ['FC_OTH_HH_E', 'Gospodarstwa domowe'],
+    ['FC_IND_E', 'Przemysł — paliwo'],
+    ['FC_OTH_CP_E', 'Handel, usługi i budynki publiczne'],
+    ['FC_NE', 'Przemysł — surowiec (głównie nawozy i chemia)'],
+    ['FC_TRA_E', 'Transport (CNG/LNG w pojazdach, tłocznie gazociągów)'],
+    ['FC_OTH_AF_E', 'Rolnictwo, leśnictwo i rybołówstwo', ['FC_OTH_FISH_E']],
+  ] },
+  { head: 'Sektor energii i inne', rows: [
+    ['NRG_E', 'Zużycie własne sektora energii (rafinerie, wydobycie, terminal LNG)'],
+    ['TI_NSP_E', 'Inne przetwarzanie (nieokreślone w statystyce)'],
+    ['DL', 'Straty w sieciach'],
+  ] },
+];
+const INDUSTRY = [['FC_IND_NMM_E', 'mineralny (szkło, ceramika, cement)'], ['FC_IND_FBT_E', 'spożywczy'], ['FC_IND_IS_E', 'hutnictwo żelaza i stali'], ['FC_IND_CPC_E', 'chemiczny (paliwo)'], ['FC_IND_PPP_E', 'papierniczy'], ['FC_IND_MAC_E', 'maszynowy'], ['FC_IND_NFM_E', 'metale nieżelazne'], ['FC_IND_TE_E', 'środki transportu'], ['FC_IND_NSP_E', 'inne']];
+
+let usesData;
+function loadUses() {
+  if (!usesData) {
+    const now = new Date();
+    const since = `${now.getUTCFullYear() - 2}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    usesData = Promise.all([
+      eurostat('nrg_cb_gasm', { unit: 'TJ_GCV', nrg_bal: ['IC_OBS', 'TI_EHG_MAP'], sinceTimePeriod: since }),
+      eurostat('nrg_bal_c', { unit: 'GWH', sinceTimePeriod: String(now.getUTCFullYear() - 5) }),
+    ]);
+    usesData.catch(() => { usesData = null; });
+  }
+  return usesData;
+}
+
+async function renderUses() {
+  const box = $('#g-uses-body');
+  try {
+    const [mon, yr] = await loadUses();
+    const twh = (v) => (v == null ? '—' : `${fmt2.format(v)} TWh`);
+    // Miesiące: TJ (ciepło spalania) → TWh.
+    const months = mon.times.filter((t) => mon.get({ nrg_bal: 'IC_OBS', time: t }) != null);
+    const ic = months.map((t) => mon.get({ nrg_bal: 'IC_OBS', time: t }) / 3600);
+    const pw = months.map((t) => (mon.get({ nrg_bal: 'TI_EHG_MAP', time: t }) ?? 0) / 3600);
+    const rest = ic.map((v, i) => v - pw[i]);
+    const days = (t) => new Date(Date.UTC(+t.slice(0, 4), +t.slice(5, 7), 0)).getUTCDate();
+    const mLabel = (t) => `${MONTHS[+t.slice(5, 7) - 1]} ${t.slice(0, 4)}`;
+    // Rok: ostatni z kompletnym bilansem.
+    const years = yr.times.filter((t) => yr.get({ nrg_bal: 'GIC', time: t }) != null);
+    const Y = years[years.length - 1];
+    const val = (code, t = Y, extra = []) => [code, ...extra].reduce((a, c) => a + (yr.get({ nrg_bal: c, time: t }) ?? 0), 0) / 1000;
+    const gic = val('GIC');
+    const stat = val('STATDIFF');
+    const maxRow = Math.max(...USE_GROUPS.flatMap((g) => g.rows.map(([c, , x]) => val(c, Y, x))));
+    const rowHtml = ([c, name, x], color) => {
+      const v = val(c, Y, x);
+      const sub = c === 'FC_IND_E' ? `<details class="sub-list"><summary>branże</summary>${INDUSTRY.map(([k, n]) => `${n}: ${twh(val(k))}`).join(' · ')}</details>` : '';
+      return `<div class="urow"><div class="uname"><i class="sw" style="background:${color}"></i>${name}${sub}</div>
+        <div class="utrack"><span class="ubar" style="width:${(v / maxRow) * 100}%;background:${color}"></span></div>
+        <div class="uval"><b>${twh(v)}</b> <span class="muted">${fmt0.format((v / gic) * 100)}% zużycia</span></div></div>`;
+    };
+    const colors = ['var(--g-gaz)', 'var(--s1)', 'var(--ink-2)'];
+    const gep = val('GEP');
+    const ghp = val('GHP');
+    const tiEhg = val('TI_EHG_E');
+    const lastM = months.length - 1;
+    box.innerHTML =
+      `<h3 class="sub-h">Miesięcznie — ostatnie ${months.length} ${plural(months.length, ['miesiąc', 'miesiące', 'miesięcy'])} (ciepło spalania)</h3>` +
+      tilesHtml([
+        { l: `Zużycie krajowe — ${mLabel(months[lastM])}`, v: twh(ic[lastM]), d: `${fmt0.format((ic[lastM] * 1000) / days(months[lastM]))} GWh na dobę` },
+        { l: 'W tym energetyka zawodowa', v: twh(pw[lastM]), d: `${fmt0.format((pw[lastM] / ic[lastM]) * 100)}% zużycia w miesiącu` },
+        { l: 'Energetyka zawodowa, 12 mies.', v: twh(sum(pw.slice(-12))), d: `${fmt0.format((sum(pw.slice(-12)) / sum(ic.slice(-12))) * 100)}% z ${twh(sum(ic.slice(-12)))}` },
+      ]) +
+      '<div class="chart" id="g-uses-chart"></div>' +
+      table(['Miesiąc', 'Zużycie krajowe [TWh]', 'Energetyka zawodowa [TWh]', 'Pozostałe [TWh]', 'Udział energetyki'], months.map((t, i) => [mLabel(t), fmt2.format(ic[i]), fmt2.format(pw[i]), fmt2.format(rest[i]), `${fmt0.format((pw[i] / ic[i]) * 100)}%`]).reverse()) +
+      `<h3 class="sub-h">Rocznie — ${Y} (pełny bilans, wartość opałowa)</h3>` +
+      tilesHtml([
+        { l: `Zużycie krajowe brutto ${Y}`, v: twh(gic), d: 'w wartości opałowej' },
+        { l: 'Gaz spalony w elektrowniach, elektrociepłowniach i ciepłowniach', v: twh(tiEhg), d: `${fmt0.format((tiEhg / gic) * 100)}% zużycia` },
+        { l: 'Wyprodukowano z niego', v: `${twh(gep)} prądu`, d: `i ${twh(ghp)} ciepła (brutto)` },
+      ]) +
+      USE_GROUPS.map((g, k) => `<h4 class="grp-h">${g.head} <span class="muted">· ${twh(g.rows.reduce((a, [c, , x]) => a + val(c, Y, x), 0))}</span></h4><div class="util">${g.rows.slice().sort((p, q) => val(q[0], Y, q[2]) - val(p[0], Y, p[2])).map((r) => rowHtml(r, colors[k])).join('')}</div>`).join('') +
+      table(['Pozycja bilansu [TWh]', ...years.slice(-3)], [
+        ['Zużycie krajowe brutto', ...years.slice(-3).map((t) => fmt2.format(val('GIC', t)))],
+        ...USE_GROUPS.flatMap((g) => g.rows.map(([c, name, x]) => [name, ...years.slice(-3).map((t) => fmt2.format(val(c, t, x)))])),
+        ...INDUSTRY.map(([c, n]) => [`\u2003przemysł: ${n}`, ...years.slice(-3).map((t) => fmt2.format(val(c, t)))]),
+        ['Różnice statystyczne', ...years.slice(-3).map((t) => fmt2.format(val('STATDIFF', t)))],
+        ['Prąd wyprodukowany z gazu (brutto)', ...years.slice(-3).map((t) => fmt2.format(val('GEP', t)))],
+        ['Ciepło wyprodukowane z gazu (brutto)', ...years.slice(-3).map((t) => fmt2.format(val('GHP', t)))],
+      ]) +
+      `<p class="note">Dane twarde z oficjalnych bilansów przekazywanych Eurostatowi (<a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_cb_gasm/default/table" rel="noopener">nrg_cb_gasm</a> — miesięcznie, <a href="https://ec.europa.eu/eurostat/databrowser/view/nrg_bal_c/default/table" rel="noopener">nrg_bal_c</a> — rocznie; licencja CC BY 4.0). Uwaga na jednostki: dane miesięczne są w cieple spalania (jak w pozostałych sekcjach strony), a roczny bilans energetyczny — w wartości opałowej, o ok. 10% niższej; dlatego suma miesięcy danego roku jest wyższa niż bilans roczny. Miesięczna „energetyka zawodowa” pochodzi z szybszej sprawozdawczości i jest niższa niż suma elektrowni, elektrociepłowni i ciepłowni zawodowych w bilansie rocznym. Miesięczne dane rozróżniają tylko energetykę zawodową (elektrownie, elektrociepłownie i ciepłownie, których podstawową działalnością jest produkcja energii); elektrociepłownie przemysłowe są w nich w „pozostałych”. Pełny podział na odbiorców jest publikowany tylko rocznie, z opóźnieniem ponad roku. Gazu spalonego w elektrociepłowni nie da się rozdzielić na „część na prąd” i „część na ciepło” — to jeden proces; bilans podaje za to, ile prądu i ciepła z niego powstało. Różnice statystyczne ${Y}: ${twh(stat)}. Dane Eurostatu zaktualizowane ${esc(new Date(mon.updated).toLocaleDateString('pl-PL'))}.</p>`;
+    const ticks = months.map((t, i) => ({ i, label: t.slice(5, 7) === '01' ? t.slice(0, 4) : MONTHS[+t.slice(5, 7) - 1], at: 'center' }));
+    drawChart('g-uses', $('#g-uses-chart'), {
+      n: months.length, stacked: true, markers: true,
+      series: [{ name: 'Energetyka zawodowa (prąd i ciepło)', color: 'var(--g-gaz)', values: pw }, { name: 'Pozostałe zużycie', color: 'var(--ink-2)', values: rest }],
+      xTicks: ticks, height: 260, minSpan: 6, yFmt: (v) => `${fmt0.format(v)} TWh`, label: 'Miesięczne zużycie gazu: energetyka zawodowa i pozostałe, TWh',
+      tooltip: (i, on) => tipRows(mLabel(months[i]), [
+        ...(on('Pozostałe zużycie') ? [{ name: 'Pozostałe zużycie', color: 'var(--ink-2)', value: twh(rest[i]) }] : []),
+        ...(on('Energetyka zawodowa (prąd i ciepło)') ? [{ name: 'Energetyka zawodowa', color: 'var(--g-gaz)', value: `${twh(pw[i])} · ${fmt0.format((pw[i] / ic[i]) * 100)}%` }] : []),
+        { name: 'Razem', value: `${twh(ic[i])} · ${fmt0.format((ic[i] * 1000) / days(months[i]))} GWh/d` },
+      ]),
+    }, 'eurostat-m');
+  } catch (e) {
+    box.innerHTML = errorBox(e);
+  }
+}
+
 // ---------- Renderowanie ----------
-const SECTIONS = ['g-day', 'g-price', 'g-supply', 'g-use', 'g-borders', 'g-store', 'g-points', 'g-power'];
+const SECTIONS = ['g-day', 'g-price', 'g-supply', 'g-use', 'g-uses', 'g-borders', 'g-store', 'g-points', 'g-power'];
 
 function renderAll() {
   redraws.clear();
@@ -253,6 +388,7 @@ function renderAll() {
   renderPrice(s);
   renderSupply(s, g);
   renderUse(s, g);
+  renderUses();
   renderBorders(s);
   renderStore(s);
   renderPoints(s);

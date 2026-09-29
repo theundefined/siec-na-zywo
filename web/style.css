@@ -292,3 +292,6 @@ img.logo { width: 32px; height: 32px; border-radius: 8px; }
 .install-help ol { margin: 0 0 8px; padding-left: 1.3em; }
 .install-help li { margin: 4px 0; }
 .install-help p { margin: 0 0 8px; font-size: 0.85rem; }
+.grp-h { margin: 14px 0 6px; font-size: 0.9rem; }
+.sub-list { font-size: 0.78rem; color: var(--ink-2); flex-basis: 100%; }
+.sub-list summary { cursor: pointer; color: var(--muted); }
