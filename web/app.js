@@ -1,19 +1,43 @@
 import { renderMix, renderBills, renderRenYear, renderElecYear } from './stats.js';
 import { tipRows, placeTip, hideTip, fmt0, fmt2 } from './charts.js';
-import { pse, FILES, TZ, HOUR, fKey, warsaw, todayIso, addDays, MONTHS, $, plural, esc, mw, errorBox, empty, table, tilesHtml, redraws, views, drawChart, initTheme, initInstall, initTabs, clearGroups, staleNote, initCountry } from './common.js';
+import { pse, FILES, TZ, HOUR, fKey, warsaw, todayIso, addDays, MONTHS, $, plural, esc, mw, errorBox, empty, table, tilesHtml, redraws, views, drawChart as drawChartC, initTheme, initInstall, initTabs, clearGroups, staleNote, initCountry } from './common.js';
 
 // ---------- Źródła danych (te same co w aplikacji Energetyczny Kompas) ----------
 
-// Dane doby są współdzielone między sekcjami (kse-load, his-gen-pal-sire), więc pobieramy je raz.
+// Dane wybranego zakresu dni. Pobieramy je porcjami po 7 dni wyrównanymi do stałego kalendarza (te same porcje
+// dla różnych zakresów → pamięć podręczna działa przy przesuwaniu i rozszerzaniu zakresu), najwyżej 4 zapytania naraz.
+// perDay — spodziewana liczba rekordów na dobę (limit $first dla porcji).
 const memo = new Map();
-function pseDay(endpoint, first) {
-  const key = `${endpoint}|${date}`;
-  if (!memo.has(key)) {
-    const p = pse(endpoint, `business_date eq '${date}'`, first);
-    p.catch(() => memo.delete(key));
-    memo.set(key, p);
-  }
-  return memo.get(key);
+const CHUNK = 7;
+let pseActive = 0;
+const pseWaiting = [];
+async function pseQ(endpoint, filter, first) {
+  if (pseActive >= 4) await new Promise((res) => pseWaiting.push(res));
+  pseActive++;
+  try { return await pse(endpoint, filter, first); } finally { pseActive--; pseWaiting.shift()?.(); }
+}
+const dayNum = (iso) => Math.floor(Date.parse(iso + 'T12:00:00Z') / 864e5);
+const isoOf = (n) => new Date(n * 864e5 + 12 * 36e5).toISOString().slice(0, 10);
+function chunksOf(a, b) {
+  const out = [];
+  for (let c = Math.floor(dayNum(a) / CHUNK) * CHUNK; c <= dayNum(b); c += CHUNK) out.push([isoOf(c), isoOf(c + CHUNK - 1)]);
+  return out;
+}
+function pseDay(endpoint, perDay) {
+  return Promise.all(chunksOf(from, date).map(([a, b]) => {
+    const key = `${endpoint}|${a}|${b}`;
+    if (!memo.has(key)) {
+      const p = pseQ(endpoint, `business_date ge '${a}' and business_date le '${b}'`, Math.min(100000, perDay * CHUNK + 200));
+      p.catch(() => memo.delete(key));
+      memo.set(key, p);
+    }
+    return memo.get(key);
+  })).then((parts) => parts.flat().filter((r) => !r.business_date || (r.business_date >= from && r.business_date <= date)));
+}
+// Odświeżenie danych bieżących: zapominamy tylko porcje zawierające dziś.
+function forgetToday() {
+  const [[a, b]] = chunksOf(todayIso(), todayIso());
+  for (const k of [...memo.keys()]) if (k.endsWith(`|${a}|${b}`) || !k.includes(`|${a}|`) && k.includes(todayIso())) memo.delete(k);
 }
 
 // Dowolne zapytanie z pamięcią podręczną (np. zakresy wielu dni).
@@ -76,7 +100,7 @@ function xTicks(grid) {
     return out;
   };
 }
-const period = (grid, i) => `${fTime.format(grid.starts[i])}–${fTime.format(grid.starts[i] + grid.step)}`;
+const period = (grid, i) => `${grid.multi ? `${fDayShort.format(grid.starts[i])}, ` : ''}${fTime.format(grid.starts[i])}–${fTime.format(grid.starts[i] + grid.step)}`;
 function nowIndex(grid) {
   const now = Date.now();
   return grid.starts.findIndex((t) => now >= t && now < t + grid.step);
@@ -134,34 +158,146 @@ const COUNTRIES = { SE: 'Szwecja', DE: 'Niemcy', CZ: 'Czechy', SK: 'Słowacja', 
 // Początek renderowania sekcji: zapamiętuje dzień (odrzucamy spóźnione odpowiedzi po zmianie daty)
 // oraz stan rozwiniętych paneli <details>, by ciche odświeżenie nie zwijało ich ani nie skakało stroną.
 function begin(box, silent) {
-  const d = date;
+  const d = `${from}|${date}`;
   const open = [...box.querySelectorAll('details')].map((x) => x.open);
   if (!silent) box.innerHTML = empty('Ładowanie…');
   return {
-    stale: () => d !== date,
+    stale: () => d !== `${from}|${date}`,
     restore: () => silent && box.querySelectorAll('details').forEach((x, i) => open[i] && (x.open = true)),
   };
 }
 
 
 
-// ---------- Stan ----------
-let date = new URLSearchParams(location.search).get('d') || todayIso();
+// ---------- Stan: zakres dni ----------
+// date = ostatni dzień zakresu (także „dziś” dla sekcji bieżących), from = pierwszy, days = liczba dni.
+// W adresie: ?d=RRRR-MM-DD (koniec) i ?dni=N (gdy więcej niż 1). Historia API PSE zaczyna się 14.06.2024.
+const PSE_START = '2024-06-14';
+const LADDER = [1, 3, 7, 14, 31, 92];
+const qs0 = new URLSearchParams(location.search);
+let date = qs0.get('d') || todayIso();
+let days = LADDER.includes(+qs0.get('dni')) ? +qs0.get('dni') : 1;
+let from = addDays(date, -(days - 1));
+const fDM = new Intl.DateTimeFormat('pl-PL', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' });
 
-function setDate(iso) {
+function setRange(end, n = days) {
   const max = addDays(todayIso(), 1);
-  if (iso > max) iso = max;
-  date = iso;
+  if (end > max) end = max;
+  if (addDays(end, -(n - 1)) < PSE_START) end = addDays(PSE_START, n - 1) > max ? max : addDays(PSE_START, n - 1);
+  date = end;
+  days = n;
+  from = addDays(end, -(n - 1));
+  if (from < PSE_START) from = PSE_START;
   const url = new URL(location.href);
-  if (iso === todayIso()) url.searchParams.delete('d');
-  else url.searchParams.set('d', iso);
+  if (end === todayIso()) url.searchParams.delete('d');
+  else url.searchParams.set('d', end);
+  if (n === 1) url.searchParams.delete('dni');
+  else url.searchParams.set('dni', n);
   history.replaceState(null, '', url);
-  $('#date').value = iso;
+  $('#date').value = end;
   $('#date').max = max;
-  $('#next').disabled = iso >= max;
-  const rel = iso === todayIso() ? 'Dziś' : iso === addDays(todayIso(), 1) ? 'Jutro' : iso === addDays(todayIso(), -1) ? 'Wczoraj' : '';
-  $('#date-label').textContent = (rel ? rel + ', ' : '') + fDateLong.format(new Date(iso + 'T00:00:00Z'));
+  $('#date').min = PSE_START;
+  $('#days').value = String(n);
+  $('#next').disabled = end >= max;
+  $('#prev').disabled = from <= PSE_START;
+  $('#one-day').hidden = n === 1;
+  const rel = end === todayIso() ? 'Dziś' : end === addDays(todayIso(), 1) ? 'Jutro' : end === addDays(todayIso(), -1) ? 'Wczoraj' : '';
+  $('#date-label').textContent = n === 1
+    ? (rel ? rel + ', ' : '') + fDateLong.format(new Date(end + 'T00:00:00Z'))
+    : `${fDM.format(new Date(from + 'T00:00:00Z'))} – ${fDM.format(new Date(end + 'T00:00:00Z'))} (${days} ${plural(days, ['dzień', 'dni', 'dni'])})`;
   loadDay();
+}
+const setDate = (iso) => setRange(iso, days);
+// Oddalenie wykresu przy pełnym widoku: następny szczebel długości; zakres rośnie głównie w przeszłość.
+function widenRange() {
+  const i = LADDER.indexOf(days);
+  if (i < 0 || i >= LADDER.length - 1) return;
+  const n = LADDER[i + 1];
+  setRange(addDays(date, Math.floor((n - days) / 3)), n);
+}
+// Wykresy zakładki dziennej: oddalanie poza pełny widok rozszerza zakres dni.
+function drawChart(key, el, o, group = 'day') {
+  return drawChartC(key, el, group === 'day' ? { ...o, onZoomOutFull: days < LADDER[LADDER.length - 1] ? widenRange : null } : o, group);
+}
+
+// ---------- Siatka zakresu i rozdzielczość wyświetlania ----------
+// Dane liczymy zawsze na siatce kwadransów całego zakresu (kafelki i sumy z pełnych danych), a do wykresów i tabel
+// uśredniamy: do 3 dni — kwadranse, do 14 dni — godziny, dłużej — doby (doby liczone od północy, z 23/25-godzinnymi).
+const baseGrid = (step = Q) => rangeGrid(from, days, step);
+function disp(grid) {
+  const target = days <= 3 ? Q : days <= 14 ? HOUR : 'D';
+  const n0 = grid.starts.length;
+  let bucket; // indeks przedziału dla każdego punktu siatki bazowej
+  let starts;
+  let ends;
+  if (target === 'D') {
+    const keys = grid.starts.map((t) => warsaw(t).slice(0, 10));
+    starts = [];
+    ends = [];
+    bucket = keys.map((k, i) => {
+      if (i === 0 || k !== keys[i - 1]) { starts.push(midnight(k)); ends.push(midnight(addDays(k, 1))); }
+      return starts.length - 1;
+    });
+  } else if (target <= grid.step) {
+    starts = grid.starts.slice();
+    ends = starts.map((t) => t + grid.step);
+    bucket = starts.map((_, i) => i);
+  } else {
+    starts = [];
+    ends = [];
+    bucket = grid.starts.map((t, i) => {
+      const h = t - (t % target);
+      if (i === 0 || h !== grid.starts[i - 1] - (grid.starts[i - 1] % target)) { starts.push(h); ends.push(h + target); }
+      return starts.length - 1;
+    });
+  }
+  const n = starts.length;
+  const same = n === n0;
+  const down = (a) => {
+    if (same) return a;
+    const sum = new Array(n).fill(0);
+    const cnt = new Array(n).fill(0);
+    a.forEach((v, i) => { if (v != null) { sum[bucket[i]] += v; cnt[bucket[i]]++; } });
+    return sum.map((v, k) => (cnt[k] ? v / cnt[k] : null));
+  };
+  const daily = target === 'D';
+  const lab = (i) => (daily
+    ? `${fDayShort.format(starts[i])} (średnio w dobie)`
+    : `${days > 1 ? `${fDayShort.format(starts[i])}, ` : ''}${fTime.format(starts[i])}–${fTime.format(ends[i])}${same ? '' : ' (średnio)'}`);
+  const now = Date.now();
+  const ni = starts.findIndex((t, i) => now >= t && now < ends[i]);
+  return {
+    n, starts, down, lab, daily, same,
+    ticks: timeTicks(starts),
+    now: ni >= 0 ? ni : null,
+    unit: same ? '' : daily ? ' — średnie dobowe' : ' — średnie godzinowe',
+  };
+}
+// Etykiety osi czasu według widocznego okresu: godziny → północe z datą → dni → początki miesięcy.
+function timeTicks(starts) {
+  const keys = starts.map((t) => warsaw(t));
+  return (v0, v1) => {
+    const a = Math.max(0, Math.floor(v0));
+    const b = Math.min(starts.length - 1, Math.ceil(v1));
+    const spanH = (starts[b] - starts[a]) / HOUR;
+    const out = [];
+    for (let i = a; i <= b; i++) {
+      const k = keys[i];
+      const hh = +k.slice(11, 13);
+      const mi = +k.slice(14, 16);
+      const newDay = i > 0 && k.slice(0, 10) !== keys[i - 1].slice(0, 10);
+      if (spanH <= 50) {
+        const every = spanH > 26 ? 360 : spanH > 12 ? 180 : spanH > 6 ? 60 : spanH > 3 ? 30 : 15;
+        if ((hh * 60 + mi) % every === 0 || newDay) out.push({ i, label: (hh === 0 && mi === 0) || newDay ? (days > 1 ? fDayShort.format(starts[i]) : k.slice(11, 16)) : k.slice(11, 16) });
+      } else if (spanH <= 24 * 20) {
+        if (newDay || i === 0) out.push({ i, label: fDayShort.format(starts[i]) });
+      } else if (spanH <= 24 * 100) {
+        const d = +k.slice(8, 10);
+        if ((newDay || i === 0) && [1, 8, 15, 22].includes(d)) out.push({ i, label: `${d}.${k.slice(5, 7)}` });
+      } else if ((newDay || i === 0) && k.slice(8, 10) === '01') out.push({ i, label: `${MONTHS[+k.slice(5, 7) - 1]} ${k.slice(0, 4)}` });
+    }
+    return out;
+  };
 }
 
 // ---------- Kompas (pdgsz) ----------
@@ -217,6 +353,27 @@ async function renderKompas({ silent = false } = {}) {
   const isToday = date === todayIso();
   const next = addDays(date, 1);
   try {
+    if (days > 1) {
+      // Zakres wielu dni: pasek godzin dla każdej doby (aktualna wersja prognozy) i podsumowanie okresu.
+      const act = await pse('pdgsz', `business_date ge '${from}' and business_date le '${date}' and is_active eq true`, days * 30 + 50);
+      if (run.stale()) return;
+      if (!act.length) return void (box.innerHTML = empty('Brak prognoz PSE dla wybranego okresu.'));
+      const byDay = new Map();
+      for (const r of act) (byDay.get(r.business_date) || byDay.set(r.business_date, []).get(r.business_date)).push(r);
+      const c = [0, 0, 0, 0];
+      act.forEach((r) => c[r.usage_fcst]++);
+      const mini = days > 7;
+      const rowsHtml = [...byDay.keys()].sort().reverse().map((d) => {
+        const g = dayGrid(d, HOUR);
+        const ni = d === todayIso() ? nowIndex(g) : -1;
+        return `<div class="kday"><div class="kday-h">${esc(fDayShort.format(midnight(d)))}${d === todayIso() ? ' <span class="badge">dziś</span>' : ''} <span class="pills">${summarize(byDay.get(d))}</span></div>${hourStrip(byDay.get(d), g, { mini, now: ni })}</div>`;
+      }).join('');
+      box.innerHTML = tilesHtml([0, 2, 3].map((s) => ({ l: STATES[s].name, v: `${c[s]} h`, d: `${fmt0.format((c[s] / act.length) * 100)}% godzin w okresie` })).concat([{ l: 'Doby z prognozą', v: `${byDay.size}`, d: `z ${days} w zakresie` }])) +
+        stateLegend() + `<div class="kdays">${rowsHtml}</div>` +
+        '<p class="note">Aktualna (ostatnia) wersja prognozy PSE dla każdej doby. Historia zmian prognozy jest dostępna po wybraniu jednego dnia.</p>';
+      run.restore();
+      return;
+    }
     const [all, nextActive] = await Promise.all([
       pse('pdgsz', `business_date eq '${date}'`, 5000),
       isToday ? pse('pdgsz', `business_date eq '${next}' and is_active eq true`, 100).catch(() => []) : Promise.resolve([]),
@@ -339,7 +496,8 @@ async function renderLoad({ silent = false } = {}) {
     const rows = await pseDay('kse-load', 500);
     if (run.stale()) return;
     if (!rows.length) return void (box.innerHTML = empty('Brak danych dla wybranego dnia.'));
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
+    const D = disp(grid);
     const n = grid.starts.length;
     const { fc, ac } = parseLoad(rows, grid);
     const series = [
@@ -351,17 +509,18 @@ async function renderLoad({ silent = false } = {}) {
     const tiles = [
       lastA >= 0 ? { l: `Ostatni pomiar (${period(grid, lastA)})`, v: mw(ac[lastA]), d: fc[lastA] != null ? `${ac[lastA] >= fc[lastA] ? '+' : '−'}${fmt0.format(Math.abs(ac[lastA] - fc[lastA]))} MW względem prognozy` : '' } : null,
       peak >= 0 ? { l: 'Prognozowany szczyt', v: mw(fc[peak]), d: period(grid, peak) } : null,
-      { l: 'Prognozowane zużycie doby', v: `${fmt0.format(fc.reduce((s, v) => s + (v || 0), 0) / 4000)} GWh`, d: '' },
+      { l: days > 1 ? 'Prognozowane zużycie w okresie' : 'Prognozowane zużycie doby', v: `${fmt0.format(fc.reduce((s, v) => s + (v || 0), 0) / 4000)} GWh`, d: '' },
     ].filter(Boolean);
     // Dziś: ostatni pomiar PSE powinien być sprzed najwyżej ok. 2 godzin.
     const lastEnd = lastA >= 0 ? grid.starts[lastA] + grid.step : midnight(date);
-    const fresh = date === todayIso() ? staleNote({ what: 'o zapotrzebowaniu (PSE)', at: lastEnd, maxMinutes: 120 }) : '';
+    const fresh = date === todayIso() || (from <= todayIso() && todayIso() <= date) ? staleNote({ what: 'o zapotrzebowaniu (PSE)', at: lastEnd, maxMinutes: 120 }) : '';
+    const S = series.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = fresh + tilesHtml(tiles) + '<div class="chart" id="load-chart"></div>' +
-      table(['Okres', 'Prognoza [MW]', 'Rzeczywiste [MW]'], grid.starts.map((_, i) => [period(grid, i), fc[i] == null ? '—' : fmt0.format(fc[i]), ac[i] == null ? '—' : fmt0.format(ac[i])]));
+      table(['Okres', 'Prognoza [MW]', 'Rzeczywiste [MW]'], D.starts.map((_, i) => [D.lab(i), S[0].values[i] == null ? '—' : fmt0.format(S[0].values[i]), S[1].values[i] == null ? '—' : fmt0.format(S[1].values[i])]));
     drawChart('load', $('#load-chart'), {
-      n, series, xTicks: xTicks(grid), label: 'Zapotrzebowanie KSE: prognoza i wykonanie',
-      nowIndex: date === todayIso() ? nowIndex(grid) : null, zero: false,
-      tooltip: (i, on) => tipRows(period(grid, i), series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) }))),
+      n: D.n, series: S, xTicks: D.ticks, label: `Zapotrzebowanie KSE: prognoza i wykonanie${D.unit}`,
+      nowIndex: D.now, zero: false,
+      tooltip: (i, on) => tipRows(D.lab(i), S.filter((x) => on(x.name)).map((x) => ({ name: x.name, color: x.color, value: mw(x.values[i]) }))),
     });
     run.restore();
   } catch (e) {
@@ -383,7 +542,7 @@ async function renderBalance({ silent = false } = {}) {
     ]);
     if (run.stale()) return;
     if (!loadRows.length || !genRows.length) return void (box.innerHTML = empty('Brak danych o zapotrzebowaniu lub generacji dla wybranego dnia.'));
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     const { ac } = parseLoad(loadRows, grid);
     const { sum: gen } = parseGen(genRows, grid);
@@ -415,7 +574,7 @@ async function renderBalance({ silent = false } = {}) {
     const maxDef = both.reduce((a, i) => (a == null || diff[i] < diff[a] ? i : a), null);
     const tiles = last == null ? [] : [
       { l: `Ostatni kwadrans (${period(grid, last)})`, v: saldo(diff[last]), d: `produkcja ${mw(gen[last])} · zapotrzebowanie ${mw(ac[last])}` },
-      { l: 'Bilans energii doby', v: `${eGen - eLoad >= 0 ? '+' : '−'}${fmt0.format(Math.abs(eGen - eLoad))} GWh`, d: `wyprodukowano ${fmt0.format(eGen)} GWh, zużyto ${fmt0.format(eLoad)} GWh` },
+      { l: days > 1 ? 'Bilans energii w okresie' : 'Bilans energii doby', v: `${eGen - eLoad >= 0 ? '+' : '−'}${fmt0.format(Math.abs(eGen - eLoad))} GWh`, d: `wyprodukowano ${fmt0.format(eGen)} GWh, zużyto ${fmt0.format(eLoad)} GWh` },
       diff[maxSur] > 0 ? { l: 'Największa nadwyżka', v: mw(diff[maxSur]), d: period(grid, maxSur) } : null,
       diff[maxDef] < 0 ? { l: 'Największy niedobór', v: mw(-diff[maxDef]), d: period(grid, maxDef) } : null,
     ].filter(Boolean);
@@ -436,42 +595,52 @@ async function renderBalance({ silent = false } = {}) {
         ]) +
         '<div class="chart" id="resid-chart"></div>' +
         '<p class="note">Nie pokrywa się: część produkcji zużywają elektrownie szczytowo-pompowe na pompowanie wody (nie jest to ujęte w zapotrzebowaniu KSE). Po jego odjęciu bilans zamyka się z dokładnością do kilkudziesięciu MW. Eksport netto: przepływy fizyczne na wszystkich granicach (PSE, przeplywy-mocy); pompowanie: his-wlk-cal (jgm).</p>';
+    const D = disp(grid);
+    const acD = D.down(ac);
+    const genD = D.down(gen);
+    const diffD = D.down(diff);
+    const expD = D.down(exp);
+    const pumpD = D.down(pump);
+    const residD = D.down(resid);
+    const restD = D.down(rest);
+    const seriesD = series.map((x) => ({ ...x, values: D.down(x.values) }));
+    const residSeriesD = residSeries.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = tilesHtml(tiles) +
       '<div class="chart" id="bal-chart"></div>' +
       '<h3 class="sub-h">Różnica: produkcja − zapotrzebowanie</h3>' +
       '<div class="chart" id="diff-chart"></div>' +
       residHtml +
       table(['Okres', 'Zapotrzebowanie [MW]', 'Produkcja [MW]', 'Produkcja − zapotrz. [MW]', 'Eksport netto [MW]', 'Pompowanie [MW]', 'Niezbilansowane [MW]'],
-        grid.starts.map((_, i) => [period(grid, i), ...[ac[i], gen[i], diff[i], exp[i], pump[i], rest[i]].map((v) => (v == null ? '—' : fmt0.format(v)))]));
+        D.starts.map((_, i) => [D.lab(i), ...[acD[i], genD[i], diffD[i], expD[i], pumpD[i], restD[i]].map((v) => (v == null ? '—' : fmt0.format(v)))]));
     drawChart('bal', $('#bal-chart'), {
-      n, series, band: { a: 1, b: 0, pos: 'var(--exp)', neg: 'var(--imp)' }, xTicks: xTicks(grid), label: 'Zapotrzebowanie a produkcja energii',
+      n: D.n, series: seriesD, band: { a: 1, b: 0, pos: 'var(--exp)', neg: 'var(--imp)' }, xTicks: D.ticks, label: `Zapotrzebowanie a produkcja energii${D.unit}`,
       legendExtra: '<span class="key"><i class="sw wash" style="background:var(--exp)"></i>nadwyżka (eksport)</span><span class="key"><i class="sw wash" style="background:var(--imp)"></i>niedobór (import)</span>',
-      nowIndex: date === todayIso() ? nowIndex(grid) : null, zero: false,
-      tooltip: (i, on) => tipRows(period(grid, i), [
-        ...series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })),
-        { name: 'Różnica', color: diff[i] == null ? null : diff[i] >= 0 ? 'var(--exp)' : 'var(--imp)', value: diff[i] == null ? '—' : saldo(diff[i]) },
+      nowIndex: D.now, zero: false,
+      tooltip: (i, on) => tipRows(D.lab(i), [
+        ...seriesD.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })),
+        { name: 'Różnica', color: diffD[i] == null ? null : diffD[i] >= 0 ? 'var(--exp)' : 'var(--imp)', value: diffD[i] == null ? '—' : saldo(diffD[i]) },
       ]),
     });
     drawChart('diff', $('#diff-chart'), {
-      n, series: [{ name: 'Różnica', color: 'var(--exp)', values: diff }], bars: true, height: 200,
+      n: D.n, series: [{ name: 'Różnica', color: 'var(--exp)', values: diffD }], bars: true, height: 200,
       barColor: (v) => (v >= 0 ? 'var(--exp)' : 'var(--imp)'),
       yFmt: (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + fmt0.format(Math.abs(v)),
-      xTicks: xTicks(grid), label: 'Różnica produkcji i zapotrzebowania',
+      xTicks: D.ticks, label: 'Różnica produkcji i zapotrzebowania',
       legendExtra: '<span class="key"><i class="sw" style="background:var(--exp)"></i>nadwyżka (eksport)</span><span class="key"><i class="sw" style="background:var(--imp)"></i>niedobór (import)</span>',
-      nowIndex: date === todayIso() ? nowIndex(grid) : null,
-      tooltip: (i) => tipRows(period(grid, i), [{ name: 'Różnica', color: diff[i] == null ? null : diff[i] >= 0 ? 'var(--exp)' : 'var(--imp)', value: diff[i] == null ? '—' : saldo(diff[i]) }]),
+      nowIndex: D.now,
+      tooltip: (i) => tipRows(D.lab(i), [{ name: 'Różnica', color: diffD[i] == null ? null : diffD[i] >= 0 ? 'var(--exp)' : 'var(--imp)', value: diffD[i] == null ? '—' : saldo(diffD[i]) }]),
     });
     if (rb.length)
       drawChart('resid', $('#resid-chart'), {
-        n, series: residSeries, xTicks: xTicks(grid), height: 220, label: 'Produkcja minus zapotrzebowanie i eksport, na tle pompowania',
-        nowIndex: date === todayIso() ? nowIndex(grid) : null,
-        tooltip: (i) => tipRows(period(grid, i), [
-          { name: 'Produkcja', value: mw(gen[i]) },
-          { name: 'Zapotrzebowanie', value: mw(ac[i]) },
-          { name: `Eksport netto`, value: exp[i] == null ? '—' : exp[i] >= 0 ? mw(exp[i]) : `import ${mw(-exp[i])}` },
-          { name: 'Różnica', color: 'var(--ink-2)', value: mw(resid[i]) },
-          { name: 'Pompowanie', color: 'var(--g-woda)', value: mw(pump[i]) },
-          { name: 'Niezbilansowane', value: mw(rest[i]) },
+        n: D.n, series: residSeriesD, xTicks: D.ticks, height: 220, label: 'Produkcja minus zapotrzebowanie i eksport, na tle pompowania',
+        nowIndex: D.now,
+        tooltip: (i) => tipRows(D.lab(i), [
+          { name: 'Produkcja', value: mw(genD[i]) },
+          { name: 'Zapotrzebowanie', value: mw(acD[i]) },
+          { name: `Eksport netto`, value: expD[i] == null ? '—' : expD[i] >= 0 ? mw(expD[i]) : `import ${mw(-expD[i])}` },
+          { name: 'Różnica', color: 'var(--ink-2)', value: mw(residD[i]) },
+          { name: 'Pompowanie', color: 'var(--g-woda)', value: mw(pumpD[i]) },
+          { name: 'Niezbilansowane', value: mw(restD[i]) },
         ]),
       });
     run.restore();
@@ -501,7 +670,7 @@ async function renderUtil({ silent = false } = {}) {
     const [rows, CAP] = await Promise.all([pseDay('his-gen-pal-sire', 20000), loadCapacity()]);
     if (run.stale()) return;
     if (!rows.length) return void (box.innerHTML = empty('Brak danych o generacji dla wybranego dnia.'));
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     const codeGroup = new Map();
     CAP.groups.forEach((g, k) => g.codes.forEach((c) => codeGroup.set(c, k)));
@@ -530,16 +699,19 @@ async function renderUtil({ silent = false } = {}) {
           <div class="uval">śr. <b>${pct(st.avg)}</b> <span class="muted">maks. ${pct(st.max)} · ostatnio ${pct(st.last)}</span></div></div>`;
       })
       .join('');
-    box.innerHTML = staleNote({ what: 'o mocy osiągalnej (ARE)', asOf: CAP.asOf, maxDays: 120, fetched: CAP.fetched, stale: CAP.stale }) + `<div class="legend"><span class="key"><i class="sw" style="background:var(--ink-2)"></i>średnie wykorzystanie w dobie</span><span class="key"><i class="plan-key"></i>maksimum w dobie</span></div>
+    const D = disp(grid);
+    const seriesD = series.map((x) => ({ ...x, values: D.down(x.values) }));
+    box.innerHTML = staleNote({ what: 'o mocy osiągalnej (ARE)', asOf: CAP.asOf, maxDays: 120, fetched: CAP.fetched, stale: CAP.stale }) + `<div class="legend"><span class="key"><i class="sw" style="background:var(--ink-2)"></i>średnie wykorzystanie ${days > 1 ? 'w okresie' : 'w dobie'}</span><span class="key"><i class="plan-key"></i>maksimum ${days > 1 ? 'w okresie' : 'w dobie'}</span></div>
       <div class="util">${rowsHtml}</div>` +
-      '<h3 class="sub-h">Wykorzystanie w ciągu doby</h3>' + '<div class="chart" id="util-chart"></div>' +
-      table(['Okres', ...CAP.groups.map((g) => g.name + ' [%]')], grid.starts.map((_, i) => [period(grid, i), ...series.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i])))])) +
+      `<h3 class="sub-h">Wykorzystanie w czasie${D.unit}</h3>` + '<div class="chart" id="util-chart"></div>' +
+      table(['Okres', ...CAP.groups.map((g) => g.name + ' [%]')], D.starts.map((_, i) => [D.lab(i), ...seriesD.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i])))])) +
       `<p class="note">Wykorzystanie = bieżąca generacja (PSE) ÷ moc osiągalna danego rodzaju źródeł, stan na koniec: ${monthName(CAP.asOf)}${CAP.live ? ' (pobierane automatycznie z ARE)' : ' (wartości zapasowe — nie udało się wczytać aktualnych danych ARE)'}. Źródła mocy: ${CAP.sources.map((x) => `<a href="${x.url}" rel="noopener">${x.name}</a>`).join(', ')}. Moc to wartość stała — nie uwzględnia bieżących remontów i ubytków. Wiatr morski: ARE jeszcze go nie wykazuje, dlatego przyjmujemy ręcznie wpisaną moc nominalną Baltic Power (1140 MW; farma jest w rozruchu). ARE nie rozdziela wiatru na lądowy i morski — gdy zacznie wykazywać morski, trzeba to rozdzielić. Instalacje hybrydowe OZE (ok. 28 MW) pominięto. Pominięto elektrownie szczytowo-pompowe (ARE nie podaje ich mocy osobno) oraz gaz koksowniczy, olej i odpady.</p>`;
+    const mwvD = mwv.map(D.down);
     drawChart('util', $('#util-chart'), {
-      n, series, xTicks: xTicks(grid), height: 280, label: 'Wykorzystanie mocy osiągalnej według rodzaju źródła',
+      n: D.n, series: seriesD, xTicks: D.ticks, height: 280, label: 'Wykorzystanie mocy osiągalnej według rodzaju źródła',
       yFmt: (v) => `${fmt0.format(v)}%`,
-      nowIndex: date === todayIso() ? nowIndex(grid) : null,
-      tooltip: (i, on) => tipRows(period(grid, i), series.map((s, k) => [s, k]).filter(([s]) => on(s.name)).map(([s, k]) => ({ name: s.name, color: s.color, value: s.values[i] == null ? '—' : `${pct(s.values[i])} · ${fmt0.format(mwv[k][i])} MW` }))),
+      nowIndex: D.now,
+      tooltip: (i, on) => tipRows(D.lab(i), seriesD.map((s, k) => [s, k]).filter(([s]) => on(s.name)).map(([s, k]) => ({ name: s.name, color: s.color, value: s.values[i] == null ? '—' : `${pct(s.values[i])} · ${fmt0.format(mwvD[k][i])} MW` }))),
     });
     run.restore();
   } catch (e) {
@@ -556,27 +728,29 @@ async function renderGen({ silent = false } = {}) {
     const rows = await pseDay('his-gen-pal-sire', 20000);
     if (run.stale()) return;
     if (!rows.length) return void (box.innerHTML = empty(date > todayIso() ? 'Dane o generacji pojawiają się na bieżąco w trakcie doby.' : 'Brak danych dla wybranego dnia.'));
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     const { series, total, oze } = parseGen(rows, grid);
     const sumAt = (i) => series.reduce((a, s) => a + (s.values[i] || 0), 0);
     const energy = series.map((s) => s.values.reduce((a, v) => a + (v || 0), 0) / 4);
     const top = energy.map((e, k) => [e, k]).sort((a, b) => b[0] - a[0])[0];
     const tiles = [
-      { l: 'Udział OZE w wybranej dobie', v: `${fmt0.format((oze / total) * 100)}%`, d: 'wiatr, słońce, biomasa, biogaz, woda (bez elektrowni szczytowo-pompowych)' },
+      { l: days > 1 ? 'Udział OZE w wybranym okresie' : 'Udział OZE w wybranej dobie', v: `${fmt0.format((oze / total) * 100)}%`, d: 'wiatr, słońce, biomasa, biogaz, woda (bez elektrowni szczytowo-pompowych)' },
       { l: 'Energia wyprodukowana', v: `${fmt0.format(total / 1000)} GWh`, d: 'suma dla dostępnych kwadransów' },
       { l: 'Największe źródło', v: GEN_GROUPS[top[1]].name, d: `${fmt0.format((top[0] / total) * 100)}% energii` },
     ];
+    const D = disp(grid);
+    const seriesD = series.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = tilesHtml(tiles) + '<div class="chart" id="gen-chart"></div>' +
-      table(['Okres', ...GEN_GROUPS.map((g) => g.name), 'Suma'], grid.starts.map((_, i) => [period(grid, i), ...series.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i]))), series[0].values[i] == null ? '—' : fmt0.format(sumAt(i))]));
+      table(['Okres', ...GEN_GROUPS.map((g) => g.name), 'Suma'], D.starts.map((_, i) => [D.lab(i), ...seriesD.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i]))), seriesD[0].values[i] == null ? '—' : fmt0.format(seriesD.reduce((a, s) => a + (s.values[i] || 0), 0))]));
     drawChart('gen', $('#gen-chart'), {
-      n, series, stacked: true, xTicks: xTicks(grid), height: 300, label: 'Dobowa struktura generacji mocy według źródeł',
-      nowIndex: date === todayIso() ? nowIndex(grid) : null,
+      n: D.n, series: seriesD, stacked: true, xTicks: D.ticks, height: 300, label: `Struktura generacji mocy według źródeł${D.unit}`,
+      nowIndex: D.now,
       tooltip: (i, on) => {
-        if (series[0].values[i] == null) return tipRows(period(grid, i), [{ name: 'brak danych', value: '' }]);
-        const tot = sumAt(i);
-        return tipRows(period(grid, i), [
-          ...series.slice().reverse().filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: `${fmt0.format(s.values[i])} MW · ${fmt0.format((s.values[i] / tot) * 100)}%` })),
+        if (seriesD[0].values[i] == null) return tipRows(D.lab(i), [{ name: 'brak danych', value: '' }]);
+        const tot = seriesD.reduce((a, s) => a + (s.values[i] || 0), 0);
+        return tipRows(D.lab(i), [
+          ...seriesD.slice().reverse().filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: `${fmt0.format(s.values[i])} MW · ${fmt0.format((s.values[i] / tot) * 100)}%` })),
           { name: 'Razem', value: mw(tot) },
         ]);
       },
@@ -593,10 +767,10 @@ async function renderRce({ silent = false } = {}) {
   const box = $('#rce-body');
   const run = begin(box, silent);
   try {
-    const rows = await pse('rce-pln', `business_date eq '${date}'`, 500);
+    const rows = await pseDay('rce-pln', 110);
     if (run.stale()) return;
     if (!rows.length) return void (box.innerHTML = empty('Ceny RCE dla tego dnia nie zostały jeszcze opublikowane (zwykle ok. 14:00 dnia poprzedniego).'));
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     const v = new Array(n).fill(null);
     for (const r of rows) {
@@ -611,17 +785,20 @@ async function renderRce({ silent = false } = {}) {
     const ni = date === todayIso() ? nowIndex(grid) : -1;
     const tiles = [
       ni >= 0 && v[ni] != null ? { l: `Teraz (${period(grid, ni)})`, v: `${fmt2.format(v[ni])} zł/MWh`, d: kwh(v[ni]) } : null,
-      { l: 'Średnia doby', v: `${fmt2.format(avg)} zł/MWh`, d: kwh(avg) },
+      { l: days > 1 ? 'Średnia w okresie' : 'Średnia doby', v: `${fmt2.format(avg)} zł/MWh`, d: kwh(avg) },
       { l: 'Najtaniej', v: `${fmt2.format(v[min])} zł/MWh`, d: period(grid, min) },
       { l: 'Najdrożej', v: `${fmt2.format(v[max])} zł/MWh`, d: period(grid, max) },
     ].filter(Boolean);
     const series = [{ name: 'RCE', color: 'var(--s1)', values: v }];
+    const D = disp(grid);
+    const vD = D.down(v);
+    const seriesD = series.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = tilesHtml(tiles) + '<div class="chart" id="rce-chart"></div>' +
-      table(['Okres', 'RCE [zł/MWh]', 'zł/kWh'], grid.starts.map((_, i) => [period(grid, i), v[i] == null ? '—' : fmt2.format(v[i]), v[i] == null ? '—' : fmt2.format(v[i] / 1000)]));
+      table(['Okres', 'RCE [zł/MWh]', 'zł/kWh'], D.starts.map((_, i) => [D.lab(i), vD[i] == null ? '—' : fmt2.format(vD[i]), vD[i] == null ? '—' : fmt2.format(vD[i] / 1000)]));
     drawChart('rce', $('#rce-chart'), {
-      n, series, step: true, area: true, xTicks: xTicks(grid), label: 'Rynkowa cena energii (RCE) w kwadransach',
-      nowIndex: ni >= 0 ? ni : null,
-      tooltip: (i) => tipRows(period(grid, i), [{ name: 'RCE', color: 'var(--s1)', value: v[i] == null ? '—' : `${fmt2.format(v[i])} zł/MWh` }, { name: '', value: v[i] == null ? '' : kwh(v[i]) }]),
+      n: D.n, series: seriesD, step: true, area: true, xTicks: D.ticks, label: `Rynkowa cena energii (RCE)${D.unit}`,
+      nowIndex: D.now,
+      tooltip: (i) => tipRows(D.lab(i), [{ name: 'RCE', color: 'var(--s1)', value: vD[i] == null ? '—' : `${fmt2.format(vD[i])} zł/MWh` }, { name: '', value: vD[i] == null ? '' : kwh(vD[i]) }]),
     });
     run.restore();
   } catch (e) {
@@ -848,7 +1025,7 @@ async function renderPrices({ silent = false } = {}) {
     ]);
     if (run.stale()) return;
     if (!ep.length && !pf.length) return void (box.innerHTML = empty('Brak danych o cenach dla wybranego dnia.'));
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     const arr = () => new Array(n).fill(null);
     const [rdn, cen, ceb, cor, en, skv, cenF, corF, imbF, skD, skD1] = Array.from({ length: 11 }, arr);
@@ -907,23 +1084,35 @@ async function renderPrices({ silent = false } = {}) {
       enIdx.length && { l: 'System krótki (niedobór energii)', v: `${fmt0.format((shortQ / enIdx.length) * 100)}% kwadransów`, d: `${shortQ} z ${enIdx.length}` },
     ].filter(Boolean);
     const status = has(cen) ? '' : '<p class="note">Wartości rozliczeniowe PSE publikuje z 1–2-dniowym opóźnieniem; do tego czasu pokazujemy bieżące, wstępne wartości CEN i EN.</p>';
+    const D = disp(grid);
+    const rdnD = D.down(rdn);
+    const cenD = D.down(cen);
+    const cenPreD = D.down(cenPre);
+    const cebD = D.down(ceb);
+    const corAllD = D.down(corAll);
+    const enBestD = D.down(enBest);
+    const skvD = D.down(skv);
+    const skDD = D.down(skD);
+    const skD1D = D.down(skD1);
+    const seriesD = series.map((x) => ({ ...x, values: D.down(x.values) }));
+    const volD = vol.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = tilesHtml(tiles) + status +
       '<div class="chart" id="prices-chart"></div>' +
-      '<h3 class="sub-h">Niezbilansowanie i stan kontraktacji systemu <span class="muted">[MWh w kwadransie]</span></h3>' +
+      `<h3 class="sub-h">Niezbilansowanie i stan kontraktacji systemu <span class="muted">[MWh w kwadransie${D.same ? '' : ', średnio'}]</span></h3>` +
       '<div class="chart" id="imb-chart"></div>' +
       table(['Okres', 'RDN', 'CEN', 'CEN wstępna', 'CEB', 'COR', 'EN [MWh]', 'SK [MWh]', 'SK D [MWh]', 'SK D-1 [MWh]'],
-        grid.starts.map((_, i) => [period(grid, i), ...[rdn[i], cen[i], cenPre[i], ceb[i], corAll[i]].map((v) => (v == null ? '—' : fmt2.format(v))), ...[enBest[i], skv[i], skD[i], skD1[i]].map((v) => (v == null ? '—' : fmt2.format(v)))])) +
+        D.starts.map((_, i) => [D.lab(i), ...[rdnD[i], cenD[i], cenPreD[i], cebD[i], corAllD[i]].map((v) => (v == null ? '—' : fmt2.format(v))), ...[enBestD[i], skvD[i], skDD[i], skD1D[i]].map((v) => (v == null ? '—' : fmt2.format(v)))])) +
       '<p class="note">Ujemne EN/SK = system „krótki” (w kontraktach brakuje energii, PSE musi ją dokupić), dodatnie = „długi”. Oznaczenia jak w raporcie PSE „Ceny energii na Rynku Bilansującym”.</p>';
-    const now = date === todayIso() ? nowIndex(grid) : null;
+    const now = D.now;
     drawChart('prices', $('#prices-chart'), {
-      n, series, step: true, xTicks: xTicks(grid), height: 280, label: 'Ceny energii: RDN i rynek bilansujący', nowIndex: now,
+      n: D.n, series: seriesD, step: true, xTicks: D.ticks, height: 280, label: `Ceny energii: RDN i rynek bilansujący${D.unit}`, nowIndex: now,
       yFmt: (v) => fmt0.format(v),
-      tooltip: (i, on) => tipRows(period(grid, i), series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: zl(s.values[i]) }))),
+      tooltip: (i, on) => tipRows(D.lab(i), seriesD.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: zl(s.values[i]) }))),
     });
     drawChart('imb', $('#imb-chart'), {
-      n, series: vol, xTicks: xTicks(grid), height: 220, label: 'Energia niezbilansowania i stan kontraktacji', nowIndex: now,
+      n: D.n, series: volD, xTicks: D.ticks, height: 220, label: 'Energia niezbilansowania i stan kontraktacji', nowIndex: now,
       yFmt: (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + fmt0.format(Math.abs(v)),
-      tooltip: (i, on) => tipRows(period(grid, i), vol.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: s.values[i] == null ? '—' : `${mwh(s.values[i])} · ${s.values[i] < 0 ? 'krótki' : 'długi'}` }))),
+      tooltip: (i, on) => tipRows(D.lab(i), volD.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: s.values[i] == null ? '—' : `${mwh(s.values[i])} · ${s.values[i] < 0 ? 'krótki' : 'długi'}` }))),
     });
     run.restore();
   } catch (e) {
@@ -940,7 +1129,7 @@ async function renderCurt({ silent = false } = {}) {
     const rows = await pseDay('poze-redoze', 500);
     if (run.stale()) return;
     if (!rows.length) return void (box.innerHTML = empty('Brak danych o redukcjach dla wybranego dnia.'));
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     const defs = [
       ['pv_red_balance', 'PV — względy bilansowe', 'var(--g-pv)'],
@@ -963,12 +1152,15 @@ async function renderCurt({ silent = false } = {}) {
       { l: 'Ograniczona energia wiatru', v: `${fmt0.format(wiE)} MWh`, d: `bilansowo ${fmt0.format(energy[2])} · sieciowo ${fmt0.format(energy[3])}` },
       { l: 'Największa łączna redukcja', v: mw(tot[iMax]), d: tot[iMax] > 0 ? period(grid, iMax) : 'brak redukcji' },
     ];
+    const D = disp(grid);
+    const totD = D.down(tot);
+    const seriesD = series.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = tilesHtml(tiles) + '<div class="chart" id="curt-chart"></div>' +
-      table(['Okres', ...defs.map((d) => d[1] + ' [MW]')], grid.starts.map((_, i) => [period(grid, i), ...series.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i])))])) +
+      table(['Okres', ...defs.map((d) => d[1] + ' [MW]')], D.starts.map((_, i) => [D.lab(i), ...seriesD.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i])))])) +
       '<p class="note">Nierynkowe redysponowanie: moc, o jaką PSE poleciły zmniejszyć generację źródeł PV i wiatrowych — ze względów bilansowych (nadpodaż energii w systemie) lub sieciowych (ograniczenia przesyłu).</p>';
     drawChart('curt', $('#curt-chart'), {
-      n, series, stacked: true, xTicks: xTicks(grid), height: 240, label: 'Redukcje generacji OZE', nowIndex: date === todayIso() ? nowIndex(grid) : null,
-      tooltip: (i, on) => tipRows(period(grid, i), [...series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Razem', value: mw(tot[i]) }]),
+      n: D.n, series: seriesD, stacked: true, xTicks: D.ticks, height: 240, label: `Redukcje generacji OZE${D.unit}`, nowIndex: D.now,
+      tooltip: (i, on) => tipRows(D.lab(i), [...seriesD.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Razem', value: mw(totD[i]) }]),
     });
     run.restore();
   } catch (e) {
@@ -1007,10 +1199,12 @@ async function renderUnits({ silent = false } = {}) {
   const box = $('#units-body');
   const run = begin(box, silent);
   try {
-    const rows = await pseDay('gen-jw', 50000);
+    // gen-jw ma ok. 10 tys. rekordów na dobę — dłuższych zakresów nie pobieramy.
+    if (days > 14) return void (box.innerHTML = empty('Dane o pracy poszczególnych elektrowni pokazujemy dla zakresu do 14 dni (PSE publikuje ok. 10 tys. rekordów na dobę). Wybierz krótszy zakres.'));
+    const rows = await pseDay('gen-jw', 12000);
     if (run.stale()) return;
     if (!rows.length) return void (box.innerHTML = empty('Brak danych o pracy elektrowni dla wybranego dnia (PSE publikuje je zwykle po zakończeniu doby).'));
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     const plants = new Map();
     for (const r of rows) {
@@ -1037,6 +1231,9 @@ async function renderUnits({ silent = false } = {}) {
     }) })).filter((s) => s.values.some((v) => v > 0));
     const eMax = list[0]?.gen || 1;
     const rowHtml = (p) => `<div class="mrow"><div class="mname"><i class="sw" style="background:${FUELS[p.fuel].color}"></i> ${esc(p.name)} <span class="muted">· ${FUELS[p.fuel].name} · ${p.units.size} ${plural(p.units.size, ['blok', 'bloki', 'bloków'])}</span></div><div class="mtrack"><span class="mbar" style="width:${(p.gen / eMax) * 100}%;background:${FUELS[p.fuel].color}"></span></div><div class="mval">${fmt2.format(p.gen / 1000)} GWh <span class="muted">śr. ${fmt0.format(p.avg)} · maks. ${fmt0.format(p.max)} MW${p.pump ? ` · pompowanie ${fmt0.format(p.pump)} MWh` : ''}</span></div></div>`;
+    const D = disp(grid);
+    const seriesD = series.map((x) => ({ ...x, values: D.down(x.values) }));
+    const fuelSeriesD = fuelSeries.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = tilesHtml([
       { l: 'Energia z dużych elektrowni', v: `${fmt0.format(total / 1000)} GWh`, d: (() => { const u = list.reduce((a, p) => a + p.units.size, 0); return `${list.length} ${plural(list.length, ['elektrownia', 'elektrownie', 'elektrowni'])}, ${u} ${plural(u, ['jednostka', 'jednostki', 'jednostek'])}`; })() },
       { l: 'Największa', v: esc(list[0].name), d: `${fmt0.format((list[0].gen / total) * 100)}% tej energii` },
@@ -1046,16 +1243,16 @@ async function renderUnits({ silent = false } = {}) {
       <div class="legend">${byFuel.map((x) => `<span class="key"><i class="sw" style="background:${FUELS[x.f].color}"></i>${FUELS[x.f].name}: <b>${fmt2.format(x.e / 1000)} GWh</b> (${fmt0.format((x.e / total) * 100)}%)</span>`).join('')}</div>` +
       '<div class="chart" id="units-fuel-chart"></div>' +
       '<h3 class="sub-h">Największe elektrownie</h3><div class="chart" id="units-chart"></div>' +
-      `<h3 class="sub-h">Ranking elektrowni — energia w dobie</h3><div class="mix">${list.slice(0, 12).map(rowHtml).join('')}</div>` +
+      `<h3 class="sub-h">Ranking elektrowni — energia ${days > 1 ? 'w okresie' : 'w dobie'}</h3><div class="mix">${list.slice(0, 12).map(rowHtml).join('')}</div>` +
       (list.length > 12 ? `<details class="table-view"><summary>Pozostałe elektrownie (${list.length - 12})</summary><div class="mix" style="margin-top:8px">${list.slice(12).map(rowHtml).join('')}</div></details>` : '') +
       `<p class="note">Jednostki wytwórcze centralnie dysponowane (JWCD) — duże jednostki sterowane przez PSE; bez małych źródeł. Na wykresie 8 elektrowni o największej produkcji; ujemne wartości to pompowanie w elektrowniach szczytowo-pompowych. Paliwo: PSE go nie publikuje — przypisane ręcznie według informacji właścicieli elektrowni (stan: wrzesień 2026); podane jest paliwo podstawowe, bez współspalania biomasy w blokach węglowych.${list.some((p) => p.fuel === 'unk') ? ` Bez przypisanego paliwa: ${list.filter((p) => p.fuel === 'unk').map((p) => esc(p.name)).join(', ')}.` : ''}</p>`;
     drawChart('units-fuel', $('#units-fuel-chart'), {
-      n, stacked: true, series: fuelSeries, xTicks: xTicks(grid), height: 240, label: 'Moc dużych elektrowni według paliwa', nowIndex: date === todayIso() ? nowIndex(grid) : null,
-      tooltip: (i, on) => tipRows(period(grid, i), [...fuelSeries.slice().reverse().filter((s) => on(s.name) && s.values[i] > 0).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Razem', value: mw(fuelSeries.reduce((a, s) => a + (s.values[i] ?? 0), 0)) }]),
+      n: D.n, stacked: true, series: fuelSeriesD, xTicks: D.ticks, height: 240, label: `Moc dużych elektrowni według paliwa${D.unit}`, nowIndex: D.now,
+      tooltip: (i, on) => tipRows(D.lab(i), [...fuelSeriesD.slice().reverse().filter((s) => on(s.name) && s.values[i] > 0).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Razem', value: mw(fuelSeriesD.reduce((a, s) => a + (s.values[i] ?? 0), 0)) }]),
     });
     drawChart('units', $('#units-chart'), {
-      n, series, xTicks: xTicks(grid), height: 280, label: 'Moc największych elektrowni', nowIndex: date === todayIso() ? nowIndex(grid) : null,
-      tooltip: (i, on) => tipRows(period(grid, i), series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) }))),
+      n: D.n, series: seriesD, xTicks: D.ticks, height: 280, label: `Moc największych elektrowni${D.unit}`, nowIndex: D.now,
+      tooltip: (i, on) => tipRows(D.lab(i), seriesD.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) }))),
     });
     run.restore();
   } catch (e) {
@@ -1070,7 +1267,7 @@ function rangeGrid(isoFrom, days, step) {
   const b = midnight(addDays(isoFrom, days));
   const starts = [];
   for (let t = a; t < b; t += step) starts.push(t);
-  return { starts, index: new Map(starts.map((t, i) => [t, i])), step };
+  return { starts, index: new Map(starts.map((t, i) => [t, i])), step, multi: days > 1 };
 }
 const fDayShort = new Intl.DateTimeFormat('pl-PL', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'numeric' });
 function multiDayTicks(grid) {
@@ -1173,7 +1370,7 @@ async function renderLolp({ silent = false } = {}) {
     const rows = await pseDay('lolp', 500);
     if (run.stale()) return;
     if (!rows.length) return void (box.innerHTML = empty('Brak danych LOLP dla wybranego dnia.'));
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     const ks = [4, 5, 6, 7, 8];
     const ramp = ['#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#104281'];
@@ -1184,13 +1381,15 @@ async function renderLolp({ silent = false } = {}) {
       if (i != null) ks.forEach((k, j) => (series[j].values[i] = r['p' + k] == null ? null : r['p' + k] * 100));
     }
     const pct = (v) => (v == null ? '—' : `${fmt2.format(v)}%`);
+    const D = disp(grid);
+    const seriesD = series.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = '<div class="chart" id="lolp-chart"></div>' +
-      table(['Okres', ...series.map((s) => s.name)], grid.starts.map((_, i) => [period(grid, i), ...series.map((s) => pct(s.values[i]))])) +
+      table(['Okres', ...seriesD.map((s) => s.name)], D.starts.map((_, i) => [D.lab(i), ...seriesD.map((s) => pct(s.values[i]))])) +
       `<p class="note">LOLP (loss of load probability) — publikowane przez PSE prawdopodobieństwo niedoboru mocy, gdy w systemie pozostaje dana rezerwa. Parametr służy do wyceny rezerw (składnik COR w cenach rynku bilansującego); jest stały w okresach (${esc([...new Set(rows.map((r) => r.ojnz_id))].join(', '))}), publikacja: ${esc(ref.publication_ts?.slice(0, 10) || '—')}.</p>`;
     drawChart('lolp', $('#lolp-chart'), {
-      n, series, xTicks: xTicks(grid), height: 240, label: 'Prawdopodobieństwo niedoboru mocy przy danej rezerwie', nowIndex: date === todayIso() ? nowIndex(grid) : null,
+      n: D.n, series: seriesD, xTicks: D.ticks, height: 240, label: `Prawdopodobieństwo niedoboru mocy przy danej rezerwie${D.unit}`, nowIndex: D.now,
       yFmt: (v) => `${fmt0.format(v)}%`,
-      tooltip: (i, on) => tipRows(period(grid, i), series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: pct(s.values[i]) }))),
+      tooltip: (i, on) => tipRows(D.lab(i), seriesD.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: pct(s.values[i]) }))),
     });
     run.restore();
   } catch (e) {
@@ -1321,7 +1520,7 @@ async function renderPkd({ silent = false } = {}) {
     const [pkd, bpkd] = await Promise.all([pseDay('pdgopkd', 500), pseDay('pdgobpkd', 500)]);
     if (run.stale()) return;
     if (!pkd.length && !bpkd.length) return void (box.innerHTML = empty('Brak planu PSE dla wybranej doby.'));
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     const f = (rows, k) => {
       const a = new Array(n).fill(null);
@@ -1344,19 +1543,29 @@ async function renderPkd({ silent = false } = {}) {
     const uArr = underB.some((v) => v != null) ? underB : underP;
     const s1 = [{ name: 'Plan dnia poprzedniego (PKD)', color: 'var(--s1)', values: overP }, { name: 'Plan bieżący (BPKD)', color: 'var(--s2)', values: overB }];
     const s2 = [{ name: 'Plan dnia poprzedniego (PKD)', color: 'var(--s1)', values: underP }, { name: 'Plan bieżący (BPKD)', color: 'var(--s2)', values: underB }];
+    const D = disp(grid);
+    const demD = D.down(dem);
+    const wiD = D.down(wi);
+    const pvD = D.down(pv);
+    const overPD = D.down(overP);
+    const overBD = D.down(overB);
+    const underPD = D.down(underP);
+    const underBD = D.down(underB);
+    const s1D = s1.map((x) => ({ ...x, values: D.down(x.values) }));
+    const s2D = s2.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = tilesHtml([
       iO >= 0 && { l: 'Najmniejszy zapas mocy w górę', v: mw(oArr[iO]), d: period(grid, iO) },
       iU >= 0 && { l: 'Najmniejsza rezerwa w dół', v: mw(uArr[iU]), d: `${period(grid, iU)} — ile można jeszcze zmniejszyć produkcję` },
-      { l: 'Planowane ograniczenia dostępności źródeł', v: mw(Math.max(...ogr.filter((v) => v != null), 0)), d: 'maksimum w dobie' },
+      { l: 'Planowane ograniczenia dostępności źródeł', v: mw(Math.max(...ogr.filter((v) => v != null), 0)), d: days > 1 ? 'maksimum w okresie' : 'maksimum w dobie' },
     ].filter(Boolean)) +
       '<h3 class="sub-h">Zapas mocy ponad zapotrzebowanie</h3><div class="chart" id="pkd-over"></div>' +
       '<h3 class="sub-h">Rezerwa w dół (poniżej zapotrzebowania)</h3><div class="chart" id="pkd-under"></div>' +
-      table(['Okres', 'Zapotrzebowanie', 'Wiatr', 'PV', 'Zapas w górę PKD', 'Zapas w górę BPKD', 'Rezerwa w dół PKD', 'Rezerwa w dół BPKD'], grid.starts.map((_, i) => [period(grid, i), ...[dem, wi, pv, overP, overB, underP, underB].map((a) => (a[i] == null ? '—' : fmt0.format(a[i])))])) +
+      table(['Okres', 'Zapotrzebowanie', 'Wiatr', 'PV', 'Zapas w górę PKD', 'Zapas w górę BPKD', 'Rezerwa w dół PKD', 'Rezerwa w dół BPKD'], D.starts.map((_, i) => [D.lab(i), ...[demD, wiD, pvD, overPD, overBD, underPD, underBD].map((a) => (a[i] == null ? '—' : fmt0.format(a[i])))])) +
       '<p class="note">Plan koordynacyjny dobowy PSE — wielkości podstawowe (pdgopkd: plan sporządzony dzień wcześniej, pdgobpkd: plan bieżący, aktualizowany w trakcie doby). Zapas w górę to moc, którą źródła mogą jeszcze dołożyć ponad planowane zapotrzebowanie; rezerwa w dół — o ile można zmniejszyć produkcję, gdy energii jest za dużo (mały zapas w dół to typowa przyczyna redukcji OZE i zaleceń zużywania prądu w Kompasie).</p>';
-    const common = { n, xTicks: xTicks(grid), height: 220, nowIndex: date === todayIso() ? nowIndex(grid) : null };
-    const tip = (series) => (i, on) => tipRows(period(grid, i), [...series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Zapotrzebowanie', value: mw(dem[i]) }, { name: 'Wiatr + PV', value: mw((wi[i] ?? 0) + (pv[i] ?? 0)) }]);
-    drawChart('pkd-over', $('#pkd-over'), { ...common, series: s1, label: 'Zapas mocy ponad zapotrzebowanie, MW', tooltip: tip(s1) });
-    drawChart('pkd-under', $('#pkd-under'), { ...common, series: s2, label: 'Rezerwa mocy w dół, MW', tooltip: tip(s2) });
+    const common = { n: D.n, xTicks: D.ticks, height: 220, nowIndex: D.now };
+    const tip = (series) => (i, on) => tipRows(D.lab(i), [...series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Zapotrzebowanie', value: mw(demD[i]) }, { name: 'Wiatr + PV', value: mw((wiD[i] ?? 0) + (pvD[i] ?? 0)) }]);
+    drawChart('pkd-over', $('#pkd-over'), { ...common, series: s1D, label: `Zapas mocy ponad zapotrzebowanie, MW${D.unit}`, tooltip: tip(s1D) });
+    drawChart('pkd-under', $('#pkd-under'), { ...common, series: s2D, label: `Rezerwa mocy w dół, MW${D.unit}`, tooltip: tip(s2D) });
     run.restore();
   } catch (e) {
     if (run.stale()) return;
@@ -1372,12 +1581,12 @@ async function renderLimits({ silent = false } = {}) {
   try {
     const next = addDays(date, 1);
     const [av, ogr, unav] = await Promise.all([
-      pseDay('pdwkseub', 20000),
+      days > 14 ? Promise.resolve([]) : pseDay('pdwkseub', 5000), // ok. 4 tys. rekordów na dobę
       pseDay('ogr-oper', 2000),
-      pseMemo('unav-pk5l', `start_dtime le '${next} 00:00' and end_dtime ge '${date} 00:00'`, 3000),
+      pseMemo('unav-pk5l', `start_dtime le '${next} 00:00' and end_dtime ge '${from} 00:00'`, 5000),
     ]);
     if (run.stale()) return;
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     // Dostępna moc według paliwa (paliwo z PLANT_FUEL, jak w sekcji elektrowni).
     const byFuel = new Map();
@@ -1413,22 +1622,26 @@ async function renderLimits({ silent = false } = {}) {
     const outByReason = Object.entries(OUT_REASONS).map(([k, l]) => ({ l, k, list: outs.filter((o) => o.reason === k) })).filter((x) => x.list.length);
     const fDT = (s) => (s ? `${s.slice(8, 10)}.${s.slice(5, 7)}.${s.slice(0, 4)} ${s.slice(11, 16)}` : '—');
     const ogrRows = ogr.slice().sort((a, b) => (a.from_dtime < b.from_dtime ? -1 : 1));
+    const D = disp(grid);
+    const nonUsD = D.down(nonUs);
+    const gridLimD = D.down(gridLim);
+    const avSeriesD = avSeries.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = (av.length ? tilesHtml([
       { l: 'Bloki ze zgłoszonymi ubytkami', v: `${unit.size}`, d: `w ${new Set(units.map((u) => u.plant)).size} elektrowniach` },
-      { l: 'Ubytki elektrowniane', v: mw(avg(nonUs)), d: 'średnio: remonty, awarie, ograniczenia techniczne' },
-      { l: 'Ubytki sieciowe', v: mw(avg(gridLim)), d: 'średnio: moc, której nie da się wyprowadzić przez sieć' },
+      { l: 'Ubytki elektrowniane', v: mw(avg(nonUsD)), d: 'średnio: remonty, awarie, ograniczenia techniczne' },
+      { l: 'Ubytki sieciowe', v: mw(avg(gridLimD)), d: 'średnio: moc, której nie da się wyprowadzić przez sieć' },
       { l: 'Postoje bloków', v: `${outs.length}`, d: outByReason.map((x) => `${x.l}: ${x.list.length}`).join(', ') },
     ]) +
       '<h3 class="sub-h">Ubytki mocy (elektrowniane + sieciowe) według paliwa</h3><div class="chart" id="limits-av"></div>' +
-      (topGrid.length ? `<h3 class="sub-h">Bloki ograniczane przez sieć</h3><div class="util">${topGrid.slice(0, 12).map((u) => `<div class="urow"><div class="uname"><i class="sw" style="background:${FUELS[plantFuel(u.plant)].color}"></i>${esc(u.plant)} <span class="muted">· ${esc(u.code)}</span></div><div class="utrack"><span class="ubar" style="width:${(u.grid / topGrid[0].grid) * 100}%;background:var(--exp)"></span></div><div class="uval"><b>${mw(u.grid)}</b> <span class="muted">średnio</span></div></div>`).join('')}</div>` : '') : empty('Brak danych o dostępności jednostek dla wybranej doby.')) +
+      (topGrid.length ? `<h3 class="sub-h">Bloki ograniczane przez sieć</h3><div class="util">${topGrid.slice(0, 12).map((u) => `<div class="urow"><div class="uname"><i class="sw" style="background:${FUELS[plantFuel(u.plant)].color}"></i>${esc(u.plant)} <span class="muted">· ${esc(u.code)}</span></div><div class="utrack"><span class="ubar" style="width:${(u.grid / topGrid[0].grid) * 100}%;background:var(--exp)"></span></div><div class="uval"><b>${mw(u.grid)}</b> <span class="muted">średnio</span></div></div>`).join('')}</div>` : '') : empty(days > 14 ? 'Ubytki poszczególnych jednostek pokazujemy dla zakresu do 14 dni (ok. 4 tys. rekordów na dobę); poniżej ograniczenia i postoje w całym okresie.' : 'Brak danych o dostępności jednostek dla wybranego okresu.')) +
       `<h3 class="sub-h">Ograniczenia pracy bloków nałożone przez PSE (${ogrRows.length})</h3>` +
-      (ogrRows.length ? table(['Od', 'Do', 'Bloki', 'Kierunek', 'Min. liczba bloków', 'Min. moc [MW]', 'Maks. liczba bloków', 'Maks. moc [MW]', 'Przyczyna', 'Element ograniczający'], ogrRows.map((o) => [fDT(o.from_dtime), fDT(o.to_dtime), esc(o.resource_code || o.resource_name || ''), esc(o.direction || ''), o.pol_min_power_of_unit_plant ?? '—', o.pol_min_power_of_unit == null ? '—' : fmt0.format(o.pol_min_power_of_unit), o.pol_max_power_of_unit ?? '—', o.pol_max_power_of_unit_plant == null ? '—' : fmt0.format(o.pol_max_power_of_unit_plant), esc(o.add_cond || ''), esc(o.limiting_element || '')])).replace('<details class="table-view">', '<details class="table-view" open>') : '<p class="muted">Brak ograniczeń operacyjnych w tej dobie.</p>') +
-      `<h3 class="sub-h">Postoje bloków w tej dobie (${outs.length})</h3>` +
+      (ogrRows.length ? table(['Od', 'Do', 'Bloki', 'Kierunek', 'Min. liczba bloków', 'Min. moc [MW]', 'Maks. liczba bloków', 'Maks. moc [MW]', 'Przyczyna', 'Element ograniczający'], ogrRows.map((o) => [fDT(o.from_dtime), fDT(o.to_dtime), esc(o.resource_code || o.resource_name || ''), esc(o.direction || ''), o.pol_min_power_of_unit_plant ?? '—', o.pol_min_power_of_unit == null ? '—' : fmt0.format(o.pol_min_power_of_unit), o.pol_max_power_of_unit ?? '—', o.pol_max_power_of_unit_plant == null ? '—' : fmt0.format(o.pol_max_power_of_unit_plant), esc(o.add_cond || ''), esc(o.limiting_element || '')])).replace('<details class="table-view">', '<details class="table-view" open>') : `<p class="muted">Brak ograniczeń operacyjnych ${days > 1 ? 'w okresie' : 'w tej dobie'}.</p>`) +
+      `<h3 class="sub-h">Postoje bloków ${days > 1 ? 'w okresie' : 'w tej dobie'} (${outs.length})</h3>` +
       (outs.length ? table(['Elektrownia', 'Blok', 'Paliwo', 'Przyczyna', 'Od', 'Do', 'Ubytek [MW]'], outs.map((o) => [esc(o.power_plant), esc(o.unit_code), FUELS[plantFuel(o.power_plant)].name, OUT_REASONS[o.reason] || esc(o.reason), fDT(o.start_dtime), fDT(o.end_dtime), unitMw(o.unit_code) ? fmt0.format(unitMw(o.unit_code)) : '—'])) : '<p class="muted">Brak zgłoszonych postojów.</p>') +
       '<p class="note">Ubytki jednostek (PSE, pdwkseub): ubytki elektrowniane (remonty, awarie, ograniczenia techniczne) i sieciowe (moc, której sieć nie jest w stanie przyjąć) co 15 minut — PSE podaje tu tylko jednostki, które zgłosiły ubytki, więc suma „dostępnych zdolności” z tego raportu nie jest mocą całego systemu (tę pokazuje sekcja „Rezerwy mocy i ubytki”). Ograniczenia operacyjne (ogr-oper): wymagania PSE co do liczby pracujących bloków i ich mocy w danym węźle sieci — np. minimalna liczba bloków, które muszą pracować, żeby utrzymać napięcia i niezawodność pracy KSE (kierunek „G/P” jak w raporcie PSE). Postoje (unav-pk5l): aktywne zgłoszenia remontów i niedostępności w planie koordynacyjnym; ubytek w MW to największa deklarowana niedostępność bloku w tej dobie.</p>';
     if (av.length) drawChart('limits-av', $('#limits-av'), {
-      n, stacked: true, series: avSeries, xTicks: xTicks(grid), height: 240, label: 'Ubytki mocy dużych jednostek według paliwa, MW', nowIndex: date === todayIso() ? nowIndex(grid) : null,
-      tooltip: (i, on) => tipRows(period(grid, i), [...avSeries.slice().reverse().filter((s) => on(s.name) && s.values[i] > 0).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Ubytki elektrowniane', value: mw(nonUs[i]) }, { name: 'Ubytki sieciowe', value: mw(gridLim[i]) }]),
+      n: D.n, stacked: true, series: avSeriesD, xTicks: D.ticks, height: 240, label: `Ubytki mocy dużych jednostek według paliwa, MW${D.unit}`, nowIndex: D.now,
+      tooltip: (i, on) => tipRows(D.lab(i), [...avSeriesD.slice().reverse().filter((s) => on(s.name) && s.values[i] > 0).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Ubytki elektrowniane', value: mw(nonUsD[i]) }, { name: 'Ubytki sieciowe', value: mw(gridLimD[i]) }]),
     });
     run.restore();
   } catch (e) {
@@ -1446,7 +1659,7 @@ async function renderBalAct({ silent = false } = {}) {
     // Rezerwy kupowane są w trybie podstawowym (mbp-tp, dzień wcześniej, godzinowo) i uzupełniającym (mbu-tu, kwadransowo).
     const [eb, mbu, mbp, cmbp] = await Promise.all([pseDay('eb-rozl', 500), pseDay('mbu-tu', 500), pseDay('mbp-tp', 100), pseDay('cmbp-tp', 100)]);
     if (run.stale()) return;
-    const grid = dayGrid(date, Q);
+    const grid = baseGrid();
     const n = grid.starts.length;
     const f = (rows, k, sign = 1) => {
       const a = new Array(n).fill(null);
@@ -1475,21 +1688,29 @@ async function renderBalAct({ silent = false } = {}) {
     const priceSeries = RES_TYPES.map(([k, l, c]) => ({ name: `${l} ↑`, color: c, values: fh(cmbp, `${k}_g`) })).filter((x) => x.values.some((v) => v != null));
     const avgUp = (k) => sumE(tot(`${k}_g`)) / n;
     const hasEb = eb.length > 0;
+    const D = disp(grid);
+    const upD = D.down(up);
+    const downD = D.down(down);
+    const aUpD = D.down(aUp);
+    const aDownD = D.down(aDown);
+    const ebSeriesD = ebSeries.map((x) => ({ ...x, values: D.down(x.values) }));
+    const capSeriesD = capSeries.map((x) => ({ ...x, values: D.down(x.values) }));
+    const priceSeriesD = priceSeries.map((x) => ({ ...x, values: D.down(x.values) }));
     box.innerHTML = tilesHtml([
       hasEb && { l: 'Energia bilansująca w górę', v: `${fmt0.format(sumE(up))} MWh`, d: `w tym aFRR ${fmt0.format(sumE(aUp))} MWh` },
       hasEb && { l: 'Energia bilansująca w dół', v: `${fmt0.format(Math.abs(sumE(down)))} MWh`, d: `w tym aFRR ${fmt0.format(Math.abs(sumE(aDown)))} MWh` },
       mbuAll && { l: 'Zakupione rezerwy w górę (średnio)', v: mw(RES_TYPES.reduce((s, [k]) => s + avgUp(k), 0)), d: RES_TYPES.filter(([k]) => avgUp(k) > 0.5).map(([k, l]) => `${l.split(' ')[0]} ${fmt0.format(avgUp(k))}`).join(' · ') + ' MW' },
     ].filter(Boolean)) +
-      `<h3 class="sub-h">Uruchomiona energia bilansująca, MWh w kwadransie</h3>${hasEb ? '<div class="chart" id="balact-eb"></div>' : '<p class="muted">Dane rozliczeniowe PSE publikuje z opóźnieniem 1–2 dni.</p>'}` +
+      `<h3 class="sub-h">Uruchomiona energia bilansująca, MWh w kwadransie${D.same ? '' : ' (średnio)'}</h3>${hasEb ? '<div class="chart" id="balact-eb"></div>' : '<p class="muted">Dane rozliczeniowe PSE publikuje z opóźnieniem 1–2 dni.</p>'}` +
       `<h3 class="sub-h">Zakupione rezerwy mocy bilansującej, MW</h3>${mbuAll ? '<div class="chart" id="balact-cap"></div>' : '<p class="muted">Brak danych.</p>'}` +
       `<h3 class="sub-h">Cena zakupu rezerw w górę (tryb podstawowy), zł/MW/h</h3>${cmbp.length ? '<div class="chart" id="balact-price"></div>' : '<p class="muted">Brak danych.</p>'}` +
-      table(['Okres', 'EB w górę', 'EB w dół', 'aFRR w górę', 'aFRR w dół', ...capSeries.map((x) => `${x.name.split(' ')[0]} ${x.name.endsWith('↑') ? '↑' : '↓'} [MW]`)], grid.starts.map((_, i) => [period(grid, i), ...[up, down, aUp, aDown].map((a) => (a[i] == null ? '—' : fmt0.format(a[i]))), ...capSeries.map((s) => (s.values[i] == null ? '—' : fmt0.format(Math.abs(s.values[i]))))])) +
+      table(['Okres', 'EB w górę', 'EB w dół', 'aFRR w górę', 'aFRR w dół', ...capSeriesD.map((x) => `${x.name.split(' ')[0]} ${x.name.endsWith('↑') ? '↑' : '↓'} [MW]`)], D.starts.map((_, i) => [D.lab(i), ...[upD, downD, aUpD, aDownD].map((a) => (a[i] == null ? '—' : fmt0.format(a[i]))), ...capSeriesD.map((s) => (s.values[i] == null ? '—' : fmt0.format(Math.abs(s.values[i]))))])) +
       '<p class="note">Energia bilansująca (PSE, eb-rozl) — ile energii PSE faktycznie „przywołało” w każdym kwadransie: dostarczonej (zwiększenie produkcji lub zmniejszenie poboru) i odebranej (odwrotnie), w tym przez automatyczną regulację aFRR; dane rozliczeniowe z opóźnieniem. Rezerwy — moc bilansująca zakupiona w trybie podstawowym (mbp-tp, aukcja dzień wcześniej, godzinowo) i uzupełniającym (mbu-tu, kwadransowo); na wykresie suma obu. Cena to cena zakupu w trybie podstawowym (cmbp-tp). FCR stabilizuje częstotliwość w sekundach, aFRR automatycznie w minutach, mFRR na polecenie dyspozytora, RR zastępuje wykorzystane rezerwy. Wezwania z rynku mocy (okresy zagrożenia) PSE ogłasza komunikatami — nie ma ich w API.</p>';
-    const common = { n, xTicks: xTicks(grid), nowIndex: date === todayIso() ? nowIndex(grid) : null };
-    const tip = (series, unit) => (i, on) => tipRows(period(grid, i), series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: s.values[i] == null ? '—' : `${fmt0.format(Math.abs(s.values[i]))} ${unit}` })));
-    if (hasEb) drawChart('balact-eb', $('#balact-eb'), { ...common, series: ebSeries, step: true, height: 240, label: 'Uruchomiona energia bilansująca, MWh', tooltip: tip(ebSeries, 'MWh') });
-    if (mbuAll) drawChart('balact-cap', $('#balact-cap'), { ...common, series: capSeries, step: true, height: 240, label: 'Zakupione rezerwy mocy bilansującej (w dół ujemne), MW', tooltip: tip(capSeries, 'MW') });
-    if (cmbp.length) drawChart('balact-price', $('#balact-price'), { ...common, series: priceSeries, step: true, height: 200, label: 'Cena zakupu rezerw w górę, zł/MW/h', tooltip: tip(priceSeries, 'zł/MW/h') });
+    const common = { n: D.n, xTicks: D.ticks, nowIndex: D.now };
+    const tip = (series, unit) => (i, on) => tipRows(D.lab(i), series.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: s.values[i] == null ? '—' : `${fmt0.format(Math.abs(s.values[i]))} ${unit}` })));
+    if (hasEb) drawChart('balact-eb', $('#balact-eb'), { ...common, series: ebSeriesD, step: true, height: 240, label: 'Uruchomiona energia bilansująca, MWh', tooltip: tip(ebSeriesD, 'MWh') });
+    if (mbuAll) drawChart('balact-cap', $('#balact-cap'), { ...common, series: capSeriesD, step: true, height: 240, label: `Zakupione rezerwy mocy bilansującej (w dół ujemne), MW${D.unit}`, tooltip: tip(capSeriesD, 'MW') });
+    if (cmbp.length) drawChart('balact-price', $('#balact-price'), { ...common, series: priceSeriesD, step: true, height: 200, label: 'Cena zakupu rezerw w górę, zł/MW/h', tooltip: tip(priceSeriesD, 'zł/MW/h') });
     run.restore();
   } catch (e) {
     if (run.stale()) return;
@@ -1514,7 +1735,6 @@ async function renderAlert() {
 // ---------- Start ----------
 function loadDay() {
   clearGroups('day', 'plan');
-  memo.clear();
   renderKompas();
   renderLoad();
   renderBalance();
@@ -1532,10 +1752,12 @@ function loadDay() {
   renderRce();
 }
 
-$('#prev').addEventListener('click', () => setDate(addDays(date, -1)));
-$('#next').addEventListener('click', () => setDate(addDays(date, 1)));
-$('#today').addEventListener('click', () => setDate(todayIso()));
-$('#date').addEventListener('change', (e) => e.target.value && setDate(e.target.value));
+$('#prev').addEventListener('click', () => setRange(addDays(date, -days)));
+$('#next').addEventListener('click', () => setRange(addDays(date, days)));
+$('#today').addEventListener('click', () => setRange(todayIso()));
+$('#date').addEventListener('change', (e) => e.target.value && setRange(e.target.value));
+$('#days').addEventListener('change', (e) => setRange(date, +e.target.value));
+$('#one-day').addEventListener('click', () => setRange(date, 1));
 
 
 initTheme();
@@ -1544,7 +1766,7 @@ initCountry();
 renderAlert();
 // Zakładki: dane dzienne ładujemy od razu (domyślny widok i odświeżanie), miesięczne i roczne — przy pierwszym otwarciu.
 initTabs({
-  d: () => { setDate(date); renderNow(); renderCo2(); },
+  d: () => { setRange(date, days); renderNow(); renderCo2(); },
   m: () => { renderRcem(); renderMix(); },
   r: () => { renderElecYear(); renderRenYear(); renderBills(); },
 });
@@ -1552,9 +1774,9 @@ initTabs({
 // Odświeżanie: bilans co minutę, dane doby co 5 minut (gdy oglądamy dziś).
 setInterval(renderNow, 60e3);
 setInterval(() => {
-  if (date === todayIso()) {
+  if (from <= todayIso() && todayIso() <= date) {
     const silent = { silent: true };
-    memo.clear();
+    forgetToday();
     renderLoad(silent);
     renderBalance(silent);
     renderUtil(silent);

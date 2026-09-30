@@ -71,6 +71,7 @@ export function hideTip() {
  * o.legend     – czy rysować legendę z przełącznikami (domyślnie gdy serii > 1); o.legendExtra – dodatkowy HTML
  * o.state      – {hidden: Set} trwały między przerysowaniami
  * o.view / o.setView – wspólny zakres widoku [od, do] (synchronizacja powiększenia między wykresami)
+ * o.onZoomOutFull – wywoływane przy oddalaniu, gdy widać już cały zakres (np. dociągnięcie kolejnych dni); opcjonalne
  */
 export function chart(container, o) {
   const n = o.n;
@@ -111,6 +112,8 @@ export function chart(container, o) {
     container.classList.add('ichart');
     const [v0, v1] = getView();
     const zoomed = v0 > 0 || v1 < n;
+    // Oddalanie przy pełnym widoku: jeśli wykres to obsługuje (onZoomOutFull), prosi aplikację o dłuższy okres.
+    const zoomOut = (nv) => (!zoomed && o.onZoomOutFull ? o.onZoomOutFull() : setView(nv));
 
     // Pasek: legenda (przełączniki) + sterowanie zakresem.
     const bar = document.createElement('div');
@@ -146,7 +149,7 @@ export function chart(container, o) {
       ctl.appendChild(b);
     };
     btn('‹', 'Przesuń w lewo', () => setView([v0 - span / 3, v1 - span / 3]), !zoomed || v0 <= 0);
-    btn('−', 'Pomniejsz (większy zakres)', () => setView([v0 - span / 2, v1 + span / 2]), !zoomed);
+    btn('−', o.onZoomOutFull && !zoomed ? 'Pokaż dłuższy okres' : 'Pomniejsz (większy zakres)', () => zoomOut([v0 - span / 2, v1 + span / 2]), !zoomed && !o.onZoomOutFull);
     btn('+', 'Powiększ (mniejszy zakres)', () => setView([v0 + span / 4, v1 - span / 4]), span <= Math.min(n, o.minSpan || 4));
     btn('›', 'Przesuń w prawo', () => setView([v0 + span / 3, v1 + span / 3]), !zoomed || v1 >= n);
     btn('⟲', 'Pełny zakres', () => setView([0, n]), !zoomed);
@@ -346,14 +349,15 @@ export function chart(container, o) {
       e.preventDefault();
       const f = toIdx(e.clientX);
       const k = e.deltaY < 0 ? 0.7 : 1 / 0.7;
-      setView([f - (f - v0) * k, f + (v1 - f) * k]);
+      if (k > 1) zoomOut([f - (f - v0) * k, f + (v1 - f) * k]);
+      else setView([f - (f - v0) * k, f + (v1 - f) * k]);
     }, { passive: false });
 
     // Klawiatura: strzałki przesuwają celownik, +/− powiększają, 0 resetuje.
     let ki = o.nowIndex != null && o.nowIndex >= v0 && o.nowIndex < v1 ? o.nowIndex : Math.floor(v0);
     svg.addEventListener('keydown', (e) => {
       if (e.key === '+' || e.key === '=') return void setView([v0 + span / 4, v1 - span / 4]);
-      if (e.key === '-') return void setView([v0 - span / 2, v1 + span / 2]);
+      if (e.key === '-') return void zoomOut([v0 - span / 2, v1 + span / 2]);
       if (e.key === '0') return void setView([0, n]);
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       e.preventDefault();

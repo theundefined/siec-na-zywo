@@ -78,7 +78,7 @@ h3 { font-size: 0.95rem; font-weight: 600; margin: 0 0 10px; }
 .brand h1 { font-size: 1.1rem; }
 .sub { margin: 0; font-size: 0.8rem; color: var(--muted); }
 .datenav { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-button, input[type="date"] {
+button, input[type="date"], .datenav select {
   font: inherit; color: var(--ink); background: var(--surface-2);
   border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-height: 36px;
 }
@@ -315,3 +315,6 @@ img.logo { width: 32px; height: 32px; border-radius: 8px; }
 .ctl-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 0 0 10px; }
 .ctl-row .year-sel, .ctl-row .seg { margin: 0; }
 .warn-box { margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: var(--surface-2); border-left: 4px solid var(--st2); font-size: 0.85rem; }
+.datectl { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.kdays { display: grid; gap: 8px; margin-top: 8px; }
+.kday-h { font-size: 0.85rem; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 4px; }

@@ -212,3 +212,18 @@ elektrowni z API trafiają do „paliwo nieznane” i są wymienione w przypisie
 
 Pominięte: `krb-rozl` (KB/KO/KCZ — w danych KCZ = KO − KB, niezgodnie z definicjami, które udało się znaleźć) i `csire-kpi*`
 (brak opisów pól). Okresów zagrożenia rynku mocy nie ma w API.
+
+### Zakres dni w zakładce „Dzienne”
+- Stan: `date` (ostatni dzień), `days` (1/3/7/14/31/92), `from`; w adresie `?d=` i `?dni=`. Wybór długości obok daty,
+  strzałki przesuwają o całą długość, „1 dzień” wraca do pojedynczej doby. Najwcześniej 14.06.2024 (historia API PSE).
+- Oddalenie wykresu przy pełnym widoku (przycisk −, Ctrl + kółko, klawisz „-”) przechodzi na następną długość
+  (`onZoomOutFull` w `charts.js`, tylko wykresy grupy `day`).
+- `pseDay(endpoint, perDay)` pobiera porcje po 7 dni wyrównane do stałego kalendarza (pamięć podręczna działa przy
+  przesuwaniu/rozszerzaniu), najwyżej 4 zapytania naraz; odświeżanie co 5 min tylko, gdy zakres obejmuje dziś, i tylko porcji z dziś.
+- Dane liczone na siatce kwadransów całego zakresu (kafelki i sumy energii z pełnych danych); `disp(grid)` uśrednia do
+  wyświetlania: ≤ 3 dni kwadranse, ≤ 14 dni godziny, dłużej doby (od północy, z dobami 23/25 h). Wielkości w MWh na kwadrans
+  (EN, SK, energia bilansująca) są wtedy średnimi na kwadrans (opisane w nagłówkach).
+- Limity: praca elektrowni (`gen-jw`, ~10 tys. rekordów/dobę) i ubytki jednostek (`pdwkseub`, ~4 tys.) do 14 dni.
+  Kompas dla wielu dni: pasek godzin dla każdej doby (aktualna wersja prognozy); historia wersji tylko dla jednego dnia.
+- Sprawdzone: energia 7 dni = suma pojedynczych dni (kse-load, 2994 GWh dla 22–28.09.2026); zakres z 29.03.2026 ma 92
+  kwadranse tej doby. 92 dni ładują się ok. 30 s.

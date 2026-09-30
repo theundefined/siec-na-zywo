@@ -26,7 +26,9 @@
       </div>
       <nav class="datenav" aria-label="Wybór dnia">
         <span class="datectl" data-view="d"><button id="prev" type="button" aria-label="Poprzedni dzień">‹</button>
-        <input id="date" type="date" aria-label="Data">
+        <input id="date" type="date" aria-label="Data (ostatni dzień zakresu)">
+        <select id="days" aria-label="Długość zakresu"><option value="1">1 dzień</option><option value="3">3 dni</option><option value="7">7 dni</option><option value="14">14 dni</option><option value="31">31 dni</option><option value="92">92 dni</option></select>
+        <button id="one-day" type="button" class="ghost" hidden title="Wróć do jednego dnia">1 dzień</button>
         <button id="next" type="button" aria-label="Następny dzień">›</button>
         <button id="today" type="button" class="ghost">Dziś</button></span>
         <button id="install" type="button" class="ghost install" hidden>Zainstaluj aplikację</button>
@@ -79,7 +81,7 @@
 
     <section class="card" id="gen" data-view="d" aria-labelledby="gen-h">
       <div class="card-head">
-        <h2 id="gen-h">Dobowa struktura generacji</h2>
+        <h2 id="gen-h">Struktura generacji</h2>
         <p class="muted">Moc według źródeł, kwadranse, MW</p>
       </div>
       <div id="gen-body"></div>
