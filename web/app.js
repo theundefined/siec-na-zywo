@@ -260,6 +260,13 @@ function disp(grid) {
     a.forEach((v, i) => { if (v != null) { sum[bucket[i]] += v; cnt[bucket[i]]++; } });
     return sum.map((v, k) => (cnt[k] ? v / cnt[k] : null));
   };
+  // Suma zamiast średniej (dla wielkości sumowanych w czasie, np. zł za przedział).
+  const total = (a) => {
+    if (same) return a;
+    const sum = new Array(n).fill(null);
+    a.forEach((v, i) => { if (v != null) sum[bucket[i]] = (sum[bucket[i]] ?? 0) + v; });
+    return sum;
+  };
   const daily = target === 'D';
   const lab = (i) => (daily
     ? `${fDayShort.format(starts[i])} (średnio w dobie)`
@@ -267,7 +274,7 @@ function disp(grid) {
   const now = Date.now();
   const ni = starts.findIndex((t, i) => now >= t && now < ends[i]);
   return {
-    n, starts, down, lab, daily, same,
+    n, starts, down, total, lab, daily, same,
     ticks: timeTicks(starts),
     now: ni >= 0 ? ni : null,
     unit: same ? '' : daily ? ' — średnie dobowe' : ' — średnie godzinowe',
@@ -1126,11 +1133,16 @@ async function renderCurt({ silent = false } = {}) {
   const box = $('#curt-body');
   const run = begin(box, silent);
   try {
-    const rows = await pseDay('poze-redoze', 500);
+    const [rows, rce] = await Promise.all([pseDay('poze-redoze', 500), pseDay('rce-pln', 110)]);
     if (run.stale()) return;
     if (!rows.length) return void (box.innerHTML = empty('Brak danych o redukcjach dla wybranego dnia.'));
     const grid = baseGrid();
     const n = grid.starts.length;
+    const price = new Array(n).fill(null);
+    for (const r of rce) {
+      const i = grid.index.get(utc(r.dtime_utc) - Q);
+      if (i != null) price[i] = r.rce_pln;
+    }
     const defs = [
       ['pv_red_balance', 'PV — względy bilansowe', 'var(--g-pv)'],
       ['pv_red_network', 'PV — względy sieciowe', 'var(--s2)'],
@@ -1147,20 +1159,53 @@ async function renderCurt({ silent = false } = {}) {
     const iMax = tot.reduce((a, v, i) => (v > tot[a] ? i : a), 0);
     const pvE = energy[0] + energy[1];
     const wiE = energy[2] + energy[3];
+    // Wartość ograniczonej energii po RCE: MW × ¼ h × zł/MWh, w każdym kwadransie (null, gdy brak ceny).
+    const worth = (a, b) => a.values.map((v, i) => (price[i] == null ? null : ((v || 0) + (b.values[i] || 0)) / 4 * price[i]));
+    const pvZ = worth(series[0], series[1]);
+    const wiZ = worth(series[2], series[3]);
+    const totZ = pvZ.map((v, i) => (v == null ? null : v + wiZ[i]));
+    const sumOf = (a) => a.reduce((s, v) => s + (v || 0), 0);
+    const hasPrice = price.some((v) => v != null);
+    const zl = (v) => {
+      if (v == null) return '—';
+      const a = Math.abs(v);
+      return a >= 1e6 ? `${fmt2.format(v / 1e6)} mln zł` : a >= 1e4 ? `${fmt0.format(v / 1e3)} tys. zł` : `${fmt0.format(v)} zł`;
+    };
     const tiles = [
       { l: 'Ograniczona energia PV', v: `${fmt0.format(pvE)} MWh`, d: `bilansowo ${fmt0.format(energy[0])} · sieciowo ${fmt0.format(energy[1])}` },
       { l: 'Ograniczona energia wiatru', v: `${fmt0.format(wiE)} MWh`, d: `bilansowo ${fmt0.format(energy[2])} · sieciowo ${fmt0.format(energy[3])}` },
       { l: 'Największa łączna redukcja', v: mw(tot[iMax]), d: tot[iMax] > 0 ? period(grid, iMax) : 'brak redukcji' },
-    ];
+      hasPrice ? { l: 'Wartość ograniczonej energii (RCE)', v: zl(sumOf(totZ)), d: `PV ${zl(sumOf(pvZ))} · wiatr ${zl(sumOf(wiZ))}${pvE + wiE > 0 ? ` · średnio ${fmt0.format(sumOf(totZ) / (pvE + wiE))} zł/MWh` : ''}` } : null,
+    ].filter(Boolean);
     const D = disp(grid);
     const totD = D.down(tot);
     const seriesD = series.map((x) => ({ ...x, values: D.down(x.values) }));
+    const pvZD = D.total(pvZ);
+    const wiZD = D.total(wiZ);
+    const totZD = D.total(totZ);
+    const priceD = D.down(price);
+    const zUnit = D.same ? ' — w kwadransie' : D.daily ? ' — w dobie' : ' — w godzinie';
     box.innerHTML = tilesHtml(tiles) + '<div class="chart" id="curt-chart"></div>' +
-      table(['Okres', ...defs.map((d) => d[1] + ' [MW]')], D.starts.map((_, i) => [D.lab(i), ...seriesD.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i])))])) +
-      '<p class="note">Nierynkowe redysponowanie: moc, o jaką PSE poleciły zmniejszyć generację źródeł PV i wiatrowych — ze względów bilansowych (nadpodaż energii w systemie) lub sieciowych (ograniczenia przesyłu).</p>';
+      (hasPrice ? `<h3 class="sub-h">Wartość ograniczonej energii po RCE, zł${zUnit}</h3><div class="chart" id="curt-pln"></div>` : '') +
+      table(['Okres', ...defs.map((d) => d[1] + ' [MW]'), ...(hasPrice ? ['RCE [zł/MWh]', 'Wartość [zł]'] : [])], D.starts.map((_, i) => [D.lab(i), ...seriesD.map((s) => (s.values[i] == null ? '—' : fmt0.format(s.values[i]))), ...(hasPrice ? [priceD[i] == null ? '—' : fmt2.format(priceD[i]), totZD[i] == null ? '—' : fmt0.format(totZD[i])] : [])])) +
+      '<p class="note">Nierynkowe redysponowanie: moc, o jaką PSE poleciły zmniejszyć generację źródeł PV i wiatrowych — ze względów bilansowych (nadpodaż energii w systemie) lub sieciowych (ograniczenia przesyłu).' +
+      (hasPrice ? ' Wartość = ograniczona energia w kwadransie × rynkowa cena energii (RCE) w tym kwadransie — to wycena rynkowa niewyprodukowanej energii, a nie kwota rekompensat wypłacanych przez PSE. Przy ujemnej RCE wartość jest ujemna: produkcja tej energii kosztowałaby wytwórców.' : '') + '</p>';
     drawChart('curt', $('#curt-chart'), {
       n: D.n, series: seriesD, stacked: true, xTicks: D.ticks, height: 240, label: `Redukcje generacji OZE${D.unit}`, nowIndex: D.now,
       tooltip: (i, on) => tipRows(D.lab(i), [...seriesD.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })), { name: 'Razem', value: mw(totD[i]) }]),
+    });
+    if (hasPrice) drawChart('curt-pln', $('#curt-pln'), {
+      n: D.n, series: [{ name: 'Wartość', color: 'var(--s1)', values: totZD }], bars: true, height: 200,
+      barColor: (v) => (v >= 0 ? 'var(--s1)' : 'var(--exp)'),
+      yFmt: (v) => (Math.abs(v) >= 1e6 ? `${fmt2.format(v / 1e6)} mln` : Math.abs(v) >= 1e3 ? `${fmt0.format(v / 1e3)} tys.` : fmt0.format(v)),
+      xTicks: D.ticks, label: `Wartość ograniczonej energii OZE po RCE, zł${zUnit}`, nowIndex: D.now,
+      legendExtra: '<span class="key"><i class="sw" style="background:var(--s1)"></i>RCE dodatnia</span><span class="key"><i class="sw" style="background:var(--exp)"></i>RCE ujemna</span>',
+      tooltip: (i) => tipRows(D.lab(i).replace(' (średnio)', '').replace(' (średnio w dobie)', ''), [
+        { name: 'PV', color: 'var(--g-pv)', value: zl(pvZD[i]) },
+        { name: 'Wiatr', color: 'var(--g-wl)', value: zl(wiZD[i]) },
+        { name: 'Razem', value: zl(totZD[i]) },
+        { name: D.same ? 'RCE' : 'RCE (średnio)', value: priceD[i] == null ? '—' : `${fmt2.format(priceD[i])} zł/MWh` },
+      ]),
     });
     run.restore();
   } catch (e) {
