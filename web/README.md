@@ -213,6 +213,16 @@ elektrowni z API trafiają do „paliwo nieznane” i są wymienione w przypisie
 Pominięte: `krb-rozl` (KB/KO/KCZ — w danych KCZ = KO − KB, niezgodnie z definicjami, które udało się znaleźć) i `csire-kpi*`
 (brak opisów pól). Okresów zagrożenia rynku mocy nie ma w API.
 
+### Trafność prognoz wiatru i PV (sekcja „Jak sprawdzają się prognozy wiatru i słońca”)
+- Prognoza D-1: `pdgopkd` (`gen_wi`, `gen_fv`) — plan publikowany dzień wcześniej (ok. 15:40), jedna wersja na dobę.
+- Prognoza bieżąca: `pk5l-wp` (`fcst_wi_tot_gen`, `fcst_pv_tot_gen`), godzinowo; dla minionych godzin każda godzina ma
+  inną `publication_ts` (ostatnia wersja sprzed tej godziny).
+- `pdgobpkd` się nie nadaje: dla minionych dób ma jedną wersję opublikowaną już po końcu doby.
+- Wykonanie: `his-gen-pal-sire` (`WI` + `WM`, `ES`; zgodne z `wi`/`pv` w `his-wlk-cal`) plus redukcje z `poze-redoze`.
+  PKD prognozuje produkcję bez redukcji (3.05.2026 w południe: PKD PV 12,4 GW ≈ produkcja 10,2 GW + redukcje 2,9 GW),
+  więc prognozy porównujemy z „produkcją możliwą” = produkcja + redukcje. `pk5l-wp` w dniach dużych redukcji bywa niższa
+  nawet od produkcji (PV 3.05.2026: −34% względem możliwej) — możliwe, że uwzględnia redukcje planowane, nieopisane przez PSE.
+
 ### Zakres dni w zakładce „Dzienne”
 - Stan: `date` (ostatni dzień), `days` (1/3/7/14/31/92), `from`; w adresie `?d=` i `?dni=`. Wybór długości obok daty,
   strzałki przesuwają o całą długość, „1 dzień” wraca do pojedynczej doby. Najwcześniej 14.06.2024 (historia API PSE).

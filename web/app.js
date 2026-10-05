@@ -1214,6 +1214,110 @@ async function renderCurt({ silent = false } = {}) {
   }
 }
 
+// ---------- Trafność prognoz wiatru i PV (pdgopkd, pk5l-wp, his-gen-pal-sire, poze-redoze) ----------
+// Prognozę porównujemy z produkcją możliwą = produkcja + redukcje poleceniem PSE: plan dnia poprzedniego (PKD)
+// prognozuje produkcję bez redukcji (sprawdzone np. 3.05.2026: PV w południe PKD 12,4 GW, produkcja 10,2 GW + redukcje 2,9 GW).
+// pk5l-wp dla minionych godzin zawiera ostatnią wersję sprzed danej godziny, a pdgobpkd — wersję z końca doby (nie jest prognozą).
+const FCST_SRC = [
+  { key: 'wi', name: 'Wiatr', codes: ['WI', 'WM'], pkd: 'gen_wi', wp: 'fcst_wi_tot_gen', red: ['wi_red_balance', 'wi_red_network'], color: 'var(--g-wl)' },
+  { key: 'pv', name: 'Słońce (PV)', codes: ['ES'], pkd: 'gen_fv', wp: 'fcst_pv_tot_gen', red: ['pv_red_balance', 'pv_red_network'], color: 'var(--g-pv)' },
+];
+async function renderFcst({ silent = false } = {}) {
+  const box = $('#fcst-body');
+  const run = begin(box, silent);
+  try {
+    const [gen, red, pkd, wp] = await Promise.all([
+      pseDay('his-gen-pal-sire', 20000),
+      pseDay('poze-redoze', 500).catch(() => []),
+      pseDay('pdgopkd', 500),
+      pseDay('pk5l-wp', 30).catch(() => []),
+    ]);
+    if (run.stale()) return;
+    if (!pkd.length && !wp.length) return void (box.innerHTML = empty('Brak prognoz PSE dla wybranego okresu.'));
+    const grid = baseGrid();
+    const n = grid.starts.length;
+    const arr = () => new Array(n).fill(null);
+    const at = (r) => grid.index.get(utc(r.dtime_utc) - Q);
+    const D = disp(grid);
+    const en = (mwh) => (Math.abs(mwh) >= 1e5 ? `${fmt0.format(mwh / 1000)} GWh` : Math.abs(mwh) >= 1000 ? `${fmt2.format(mwh / 1000)} GWh` : `${fmt0.format(mwh)} MWh`);
+    const pct = (v) => `${v >= 0 ? '+' : '−'}${fmt0.format(Math.abs(v))}%`;
+    const parts = FCST_SRC.map((src) => {
+      const act = arr();
+      const cut = arr();
+      const fP = arr();
+      const fW = arr();
+      for (const r of gen) {
+        if (!src.codes.includes(r.alias_sire)) continue;
+        const i = at(r);
+        const v = parseFloat(String(r.value).replace(',', '.'));
+        if (i != null && isFinite(v)) act[i] = (act[i] || 0) + v;
+      }
+      for (const r of red) { const i = at(r); if (i != null) cut[i] = src.red.reduce((a, f) => a + Math.abs(r[f] || 0), 0); }
+      for (const r of pkd) { const i = at(r); if (i != null && r[src.pkd] != null) fP[i] = r[src.pkd]; }
+      // pk5l-wp jest godzinowy (plan_dtime = koniec godziny): wartość na 4 kwadranse.
+      for (const r of wp) {
+        const i = grid.index.get(utc(r.plan_dtime_utc) - HOUR);
+        if (i == null || r[src.wp] == null) continue;
+        for (let k = i; k < Math.min(n, i + HOUR / Q); k++) fW[k] = r[src.wp];
+      }
+      const pot = act.map((v, i) => (v == null ? null : v + (cut[i] || 0)));
+      // Statystyki z kwadransów, dla których jest i prognoza, i wykonanie.
+      const stat = (f) => {
+        const ii = pot.map((_, i) => i).filter((i) => pot[i] != null && f[i] != null);
+        if (!ii.length) return null;
+        const potE = ii.reduce((a, i) => a + pot[i], 0) / 4;
+        const fE = ii.reduce((a, i) => a + f[i], 0) / 4;
+        const mae = ii.reduce((a, i) => a + Math.abs(f[i] - pot[i]), 0) / ii.length;
+        const mean = (potE * 4) / ii.length;
+        return { mae, rel: mean > 0 ? (mae / mean) * 100 : null, bias: potE > 0 ? ((fE - potE) / potE) * 100 : null, potE, fE, count: ii.length };
+      };
+      const sP = stat(fP);
+      const sW = stat(fW);
+      const has = act.some((v) => v != null);
+      const actE = act.reduce((a, v) => a + (v || 0), 0) / 4;
+      const cutE = act.reduce((a, v, i) => a + (v == null ? 0 : cut[i] || 0), 0) / 4;
+      const series = [
+        { name: 'Prognoza D-1 (plan PKD)', color: 'var(--s1)', values: D.down(fP) },
+        { name: 'Prognoza bieżąca (pk5l-wp)', color: 'var(--s7)', values: D.down(fW) },
+        { name: 'Produkcja możliwa (z redukcjami)', color: 'var(--exp)', values: D.down(pot) },
+        { name: 'Produkcja', color: src.color, values: D.down(act) },
+      ];
+      const cutD = D.down(act.map((v, i) => (v == null ? null : cut[i] || 0)));
+      const tiles = [
+        sP && { l: 'Średni błąd prognozy D-1', v: mw(sP.mae), d: sP.rel == null ? '' : `${fmt0.format(sP.rel)}% średniej możliwej produkcji` },
+        sP && sP.bias != null && { l: 'Prognoza D-1 a możliwa produkcja', v: pct(sP.bias), d: `prognoza ${en(sP.fE)} · możliwa ${en(sP.potE)}${sP.count < n ? ' (okres z pomiarami)' : ''}` },
+        sW && { l: 'Średni błąd prognozy bieżącej', v: mw(sW.mae), d: sW.bias == null ? '' : `energia ${pct(sW.bias)} względem możliwej produkcji` },
+        has && { l: 'Redukcje poleceniem PSE', v: en(cutE), d: actE + cutE > 0 ? `${fmt0.format((cutE / (actE + cutE)) * 100)}% możliwej produkcji · wyprodukowano ${en(actE)}` : 'brak produkcji w okresie' },
+      ];
+      return { src, series, cutD, tiles, has };
+    });
+    box.innerHTML = (!parts[0].has ? empty(date > todayIso() ? 'Pomiary produkcji pojawiają się w trakcie doby — poniżej tylko prognozy.' : 'Brak pomiarów produkcji dla wybranego okresu — poniżej tylko prognozy.') : '') +
+      parts.map((p) => `<h3 class="sub-h">${p.src.name}</h3>${tilesHtml(p.tiles)}<div class="chart" id="fcst-${p.src.key}"></div>`).join('') +
+      table(['Okres', ...parts.flatMap((p) => [`${p.src.name}: prognoza D-1`, 'prognoza bieżąca', 'produkcja', 'redukcje'])], D.starts.map((_, i) => [D.lab(i), ...parts.flatMap((p) => [p.series[0].values[i], p.series[1].values[i], p.series[3].values[i], p.cutD[i]].map((v) => (v == null ? '—' : fmt0.format(v))))])) +
+      '<p class="note">Prognoza D-1 — plan koordynacyjny dobowy PSE sporządzony dzień wcześniej (pdgopkd); prognoza bieżąca — plan koordynacyjny pk5l-wp (ten sam co w sekcji „Prognoza PSE na 7 dni”), dla minionych godzin w ostatniej wersji sprzed danej godziny, godzinowo; w dniach dużych redukcji bywa wyraźnie niższa od produkcji możliwej, a nawet od rzeczywistej (np. PV 3.05.2026) — możliwe, że uwzględnia redukcje planowane przez PSE, czego PSE nie opisuje. ' +
+      'Prognozy porównujemy z produkcją możliwą, czyli rzeczywistą produkcją powiększoną o redukcje poleceniem PSE (zacieniowane pasmo; sekcja „Redukcje generacji OZE”) — bez nich prognoza w godzinach redukcji wyglądałaby na zawyżoną. ' +
+      'Nie są uwzględnione ograniczenia, o których wytwórcy decydują sami (np. wyłączanie PV przy ujemnych cenach). Średni błąd = średnia bezwzględna różnica w kwadransach; dla PV liczona także z godzin nocnych.</p>';
+    for (const p of parts) {
+      const S = p.series;
+      drawChart(`fcst-${p.src.key}`, $(`#fcst-${p.src.key}`), {
+        n: D.n, series: S, xTicks: D.ticks, height: 260, nowIndex: D.now,
+        band: { a: 2, b: 3, pos: 'var(--exp)', neg: 'var(--exp)' },
+        label: `${p.src.name}: prognoza PSE, produkcja i redukcje, MW${D.unit}`,
+        legendExtra: '<span class="key"><i class="sw" style="background:var(--exp);opacity:.3"></i>Redukcje poleceniem PSE</span>',
+        tooltip: (i, on) => tipRows(D.lab(i), [
+          ...S.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: mw(s.values[i]) })),
+          { name: 'Redukcje PSE', value: mw(p.cutD[i]) },
+          S[0].values[i] != null && S[2].values[i] != null ? { name: 'Błąd prognozy D-1', value: `${S[0].values[i] >= S[2].values[i] ? '+' : '−'}${mw(Math.abs(S[0].values[i] - S[2].values[i]))}` } : null,
+        ].filter(Boolean)),
+      });
+    }
+    run.restore();
+  } catch (e) {
+    if (run.stale()) return;
+    box.innerHTML = errorBox(e);
+  }
+}
+
 // ---------- Praca dużych elektrowni (gen-jw: jednostki wytwórcze centralnie dysponowane) ----------
 // Paliwo elektrowni JWCD — PSE go nie publikuje, więc lista jest prowadzona ręcznie na podstawie informacji właścicieli
 // (stan: wrzesień 2026). Nowe nazwy z API trafiają do „paliwo nieznane”, żeby było widać, co trzeba uzupełnić.
@@ -1786,6 +1890,7 @@ function loadDay() {
   renderUtil();
   renderPrices();
   renderCurt();
+  renderFcst();
   renderUnits();
   renderPlan();
   renderLolp();
@@ -1827,6 +1932,7 @@ setInterval(() => {
     renderUtil(silent);
     renderPrices(silent);
     renderCurt(silent);
+    renderFcst(silent);
     renderUnits(silent);
     renderGen(silent);
     renderKompas(silent);

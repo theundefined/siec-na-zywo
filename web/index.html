@@ -43,7 +43,7 @@
     <div id="country" class="country-row" data-view="m r"></div>
     <p id="date-label" class="date-label" data-view="d"></p>
     <nav class="toc" aria-label="Sekcje">
-      <a href="#kompas" data-view="d">Kompas</a><a href="#now" data-view="d">Bilans teraz</a><a href="#load" data-view="d">Zapotrzebowanie</a><a href="#bal" data-view="d">Produkcja vs zapotrz.</a><a href="#gen" data-view="d">Struktura generacji</a><a href="#util" data-view="d">Wykorzystanie mocy</a><a href="#rce" data-view="d">RCE</a><a href="#prices" data-view="d">Ceny RDN i RB</a><a href="#curt" data-view="d">Redukcje OZE</a><a href="#units" data-view="d">Elektrownie</a><a href="#plan" data-view="d">Prognoza 7 dni</a><a href="#lolp" data-view="d">LOLP</a><a href="#reserve" data-view="d">Rezerwy mocy</a><a href="#pkd" data-view="d">Plan na dobę</a><a href="#limits" data-view="d">Ograniczenia i postoje</a><a href="#balact" data-view="d">Przywołania RB</a><a href="#rcem" data-view="m">RCEm</a><a href="#co2" data-view="d">CO₂</a><a href="#mix" data-view="m">Miks i OZE miesięcznie</a><a href="#elec-y" data-view="r">Bilans roczny</a><a href="#ren-y" data-view="r">OZE rocznie</a><a href="#bills" data-view="r">Ceny dla odbiorców</a>
+      <a href="#kompas" data-view="d">Kompas</a><a href="#now" data-view="d">Bilans teraz</a><a href="#load" data-view="d">Zapotrzebowanie</a><a href="#bal" data-view="d">Produkcja vs zapotrz.</a><a href="#gen" data-view="d">Struktura generacji</a><a href="#util" data-view="d">Wykorzystanie mocy</a><a href="#rce" data-view="d">RCE</a><a href="#prices" data-view="d">Ceny RDN i RB</a><a href="#curt" data-view="d">Redukcje OZE</a><a href="#fcst" data-view="d">Trafność prognoz OZE</a><a href="#units" data-view="d">Elektrownie</a><a href="#plan" data-view="d">Prognoza 7 dni</a><a href="#lolp" data-view="d">LOLP</a><a href="#reserve" data-view="d">Rezerwy mocy</a><a href="#pkd" data-view="d">Plan na dobę</a><a href="#limits" data-view="d">Ograniczenia i postoje</a><a href="#balact" data-view="d">Przywołania RB</a><a href="#rcem" data-view="m">RCEm</a><a href="#co2" data-view="d">CO₂</a><a href="#mix" data-view="m">Miks i OZE miesięcznie</a><a href="#elec-y" data-view="r">Bilans roczny</a><a href="#ren-y" data-view="r">OZE rocznie</a><a href="#bills" data-view="r">Ceny dla odbiorców</a>
     </nav>
     <p class="chart-hint" data-view="d m r">Wykresy: przeciągnij myszą, by powiększyć zakres · Ctrl + kółko przybliża/oddala · dwuklik przywraca pełny zakres · kliknięcie w legendzie ukrywa/pokazuje serię (dwuklik — tylko ta seria). Powiększenie jest wspólne dla wykresów doby.</p>
 
@@ -117,6 +117,14 @@
         <p class="muted">Moc PV i farm wiatrowych ograniczona poleceniem PSE, kwadranse, MW</p>
       </div>
       <div id="curt-body"></div>
+    </section>
+
+    <section class="card" id="fcst" data-view="d" aria-labelledby="fcst-h">
+      <div class="card-head">
+        <h2 id="fcst-h">Jak sprawdzają się prognozy wiatru i słońca</h2>
+        <p class="muted">Prognoza PSE a rzeczywista produkcja i redukcje poleceniem PSE, MW</p>
+      </div>
+      <div id="fcst-body"></div>
     </section>
 
     <section class="card" id="units" data-view="d" aria-labelledby="units-h">
