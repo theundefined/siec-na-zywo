@@ -537,15 +537,97 @@ async function renderLoad({ silent = false } = {}) {
 }
 
 // ---------- Zapotrzebowanie a produkcja (kse-load + his-gen-pal-sire) ----------
+// Kwota w zł w czytelnej skali (zł / tys. zł / mln zł).
+const zl = (v) => {
+  if (v == null) return '—';
+  const a = Math.abs(v);
+  return a >= 1e6 ? `${fmt2.format(v / 1e6)} mln zł` : a >= 1e4 ? `${fmt0.format(v / 1e3)} tys. zł` : `${fmt0.format(v)} zł`;
+};
+const zlAxis = (v) => (Math.abs(v) >= 1e6 ? `${fmt2.format(v / 1e6)} mln` : Math.abs(v) >= 1e3 ? `${fmt0.format(v / 1e3)} tys.` : fmt0.format(v));
+
+// Wartość importu i eksportu energii po RCE (sekcja bilansu). impP/expP — moc brutto [MW], price — RCE [zł/MWh],
+// wszystko na kwadransowej siatce grid. Zwraca HTML i funkcję rysującą wykresy (po wstawieniu HTML).
+function tradeValue(grid, impP, expP, price) {
+  const n = grid.starts.length;
+  const head = '<h3 class="sub-h">Wartość importu i eksportu energii (po RCE)</h3>';
+  // Tylko kwadranse z przepływem i ceną — inaczej średnia zł/kWh byłaby przekłamana (RCE jest znana dzień wcześniej, przepływy dopiero po dobie).
+  const ok = (i) => impP[i] != null && price[i] != null;
+  if (!grid.starts.some((_, i) => ok(i))) return { html: head + empty('Brak przepływów międzysystemowych lub cen RCE dla wybranego okresu.'), draw() {} };
+  const impE = impP.map((v, i) => (ok(i) ? v / 4 : null)); // MWh w kwadransie
+  const expE = expP.map((v, i) => (ok(i) ? v / 4 : null));
+  const impZ = impE.map((e, i) => (e == null ? null : e * price[i])); // zł w kwadransie
+  const expZ = expE.map((e, i) => (e == null ? null : e * price[i]));
+  const sum = (a, idx) => idx.reduce((s, i) => s + (a[i] || 0), 0);
+  const perKwh = (z, e) => (e > 0 ? `${fmt2.format(z / e / 1000)} zł/kWh` : '—');
+  const all = grid.starts.map((_, i) => i);
+  const tot = { iE: sum(impE, all), eE: sum(expE, all), iZ: sum(impZ, all), eZ: sum(expZ, all) };
+  const bal = tot.eZ - tot.iZ;
+  const tiles = [
+    { l: 'Import energii', v: zl(tot.iZ), d: `${fmt0.format(tot.iE)} MWh · średnio ${perKwh(tot.iZ, tot.iE)}` },
+    { l: 'Eksport energii', v: zl(tot.eZ), d: `${fmt0.format(tot.eE)} MWh · średnio ${perKwh(tot.eZ, tot.eE)}` },
+    { l: 'Wartość eksportu − importu', v: `${bal >= 0 ? '+' : '−'}${zl(Math.abs(bal))}`, d: bal >= 0 ? 'wysłana energia warta więcej niż sprowadzona' : 'sprowadzona energia warta więcej niż wysłana' },
+  ];
+  // Sumy dobowe (doby od północy czasu polskiego, również 23- i 25-godzinne).
+  const dayIdx = new Map();
+  grid.starts.forEach((t, i) => {
+    const k = warsaw(t).slice(0, 10);
+    if (!dayIdx.has(k)) dayIdx.set(k, []);
+    dayIdx.get(k).push(i);
+  });
+  const dayRows = [...dayIdx].filter(([, idx]) => idx.some(ok)).map(([k, idx]) => {
+    const r = { iE: sum(impE, idx), eE: sum(expE, idx), iZ: sum(impZ, idx), eZ: sum(expZ, idx) };
+    return [fDayShort.format(midnight(k)) + (idx.every(ok) ? '' : ' (niepełna)'), fmt0.format(r.iE), fmt0.format(r.iZ), r.iE > 0 ? fmt2.format(r.iZ / r.iE / 1000) : '—',
+      fmt0.format(r.eE), fmt0.format(r.eZ), r.eE > 0 ? fmt2.format(r.eZ / r.eE / 1000) : '—', fmt0.format(r.eZ - r.iZ)];
+  });
+  const D = disp(grid);
+  const iZD = D.total(impZ);
+  const eZD = D.total(expZ);
+  const iED = D.total(impE);
+  const eED = D.total(expE);
+  const zUnit = D.same ? ' — w kwadransie' : D.daily ? ' — w dobie' : ' — w godzinie';
+  const when = (i) => (D.daily ? fDayShort.format(D.starts[i]) : D.lab(i).replace(' (średnio)', ''));
+  const kwhD = (z, e) => z.map((v, i) => (v == null || !(e[i] > 0) ? null : v / e[i] / 1000));
+  const iPD = kwhD(iZD, iED);
+  const ePD = kwhD(eZD, eED);
+  const html = head + tilesHtml(tiles) +
+    '<div class="chart" id="trade-chart"></div><div class="chart" id="trade-price"></div>' +
+    table(['Doba', 'Import [MWh]', 'Import [zł]', 'Import [zł/kWh]', 'Eksport [MWh]', 'Eksport [zł]', 'Eksport [zł/kWh]', 'Eksport − import [zł]'], dayRows) +
+    '<p class="note">Wartość = energia przepływająca przez granice w kwadransie (przepływy fizyczne brutto, osobno każdy kierunek na każdej granicy) × rynkowa cena energii (RCE) w tym kwadransie; zł/kWh to średnia ważona energią. To wycena rynkowa, a nie kwoty faktycznie zapłacone w handlu transgranicznym (rozliczanym w ramach łączenia rynków i kontraktów), a przepływy fizyczne różnią się od wymiany handlowej. Przy ujemnej RCE wartość jest ujemna. Liczymy tylko kwadranse, dla których są i przepływy, i ceny — doby oznaczone „niepełna” mają braki danych.</p>';
+  const draw = () => {
+    drawChart('trade', $('#trade-chart'), {
+      n: D.n, bars: true, height: 220, xTicks: D.ticks, nowIndex: D.now, yFmt: zlAxis, legend: false,
+      series: [{ name: 'Import', color: 'var(--imp)', values: iZD }, { name: 'Eksport', color: 'var(--exp)', values: eZD.map((v) => (v == null ? null : -v)) }],
+      legendExtra: '<span class="key"><i class="sw" style="background:var(--imp)"></i>import (w górę)</span><span class="key"><i class="sw" style="background:var(--exp)"></i>eksport (w dół)</span>',
+      label: `Wartość importu i eksportu energii po RCE, zł${zUnit}`,
+      tooltip: (i) => tipRows(when(i), [
+        { name: 'Import', color: 'var(--imp)', value: iZD[i] == null ? '—' : `${zl(iZD[i])} · ${fmt0.format(iED[i])} MWh` },
+        { name: 'Eksport', color: 'var(--exp)', value: eZD[i] == null ? '—' : `${zl(eZD[i])} · ${fmt0.format(eED[i])} MWh` },
+        { name: 'Eksport − import', value: iZD[i] == null ? '—' : zl(eZD[i] - iZD[i]) },
+      ]),
+    });
+    drawChart('trade-price', $('#trade-price'), {
+      n: D.n, step: true, height: 200, xTicks: D.ticks, nowIndex: D.now, yFmt: (v) => fmt2.format(v),
+      series: [{ name: 'Import', color: 'var(--imp)', values: iPD }, { name: 'Eksport', color: 'var(--exp)', values: ePD }],
+      label: `Średnia wartość 1 kWh importu i eksportu (RCE ważona energią), zł/kWh${D.same ? '' : D.daily ? ' — w dobie' : ' — w godzinie'}`,
+      tooltip: (i, on) => tipRows(when(i), [
+        ...(on('Import') ? [{ name: 'Import', color: 'var(--imp)', value: iPD[i] == null ? '—' : `${fmt2.format(iPD[i])} zł/kWh` }] : []),
+        ...(on('Eksport') ? [{ name: 'Eksport', color: 'var(--exp)', value: ePD[i] == null ? '—' : `${fmt2.format(ePD[i])} zł/kWh` }] : []),
+      ]),
+    });
+  };
+  return { html, draw };
+}
+
 async function renderBalance({ silent = false } = {}) {
   const box = $('#bal-body');
   const run = begin(box, silent);
   try {
-    const [loadRows, genRows, flowRows, wlkRows] = await Promise.all([
+    const [loadRows, genRows, flowRows, wlkRows, rceRows] = await Promise.all([
       pseDay('kse-load', 500),
       pseDay('his-gen-pal-sire', 20000),
       pseDay('przeplywy-mocy', 5000).catch(() => []),
       pseDay('his-wlk-cal', 500).catch(() => []),
+      pseDay('rce-pln', 110).catch(() => []),
     ]);
     if (run.stale()) return;
     if (!loadRows.length || !genRows.length) return void (box.innerHTML = empty('Brak danych o zapotrzebowaniu lub generacji dla wybranego dnia.'));
@@ -559,6 +641,21 @@ async function renderBalance({ silent = false } = {}) {
     for (const r of flowRows) {
       const i = grid.index.get(utc(r.dtime_utc) - Q);
       if (i != null && r.value != null) exp[i] = (exp[i] || 0) - r.value;
+    }
+    // Import i eksport brutto: na jednej granicy w tym samym kwadransie mogą płynąć oba kierunki (np. DE-PL i PL-DE),
+    // więc sumujemy osobno wiersze dodatnie (import) i ujemne (eksport), bez saldowania na granicy.
+    const impP = new Array(n).fill(null);
+    const expP = new Array(n).fill(null);
+    for (const r of flowRows) {
+      const i = grid.index.get(utc(r.dtime_utc) - Q);
+      if (i == null || r.value == null) continue;
+      impP[i] = (impP[i] || 0) + Math.max(0, r.value);
+      expP[i] = (expP[i] || 0) + Math.max(0, -r.value);
+    }
+    const price = new Array(n).fill(null);
+    for (const r of rceRows) {
+      const i = grid.index.get(utc(r.dtime_utc) - Q);
+      if (i != null) price[i] = r.rce_pln;
     }
     // Pobór mocy przez elektrownie szczytowo-pompowe (jgm < 0 = pompowanie).
     const pump = new Array(n).fill(null);
@@ -602,6 +699,7 @@ async function renderBalance({ silent = false } = {}) {
         ]) +
         '<div class="chart" id="resid-chart"></div>' +
         '<p class="note">Nie pokrywa się: część produkcji zużywają elektrownie szczytowo-pompowe na pompowanie wody (nie jest to ujęte w zapotrzebowaniu KSE). Po jego odjęciu bilans zamyka się z dokładnością do kilkudziesięciu MW. Eksport netto: przepływy fizyczne na wszystkich granicach (PSE, przeplywy-mocy); pompowanie: his-wlk-cal (jgm).</p>';
+    const tradeHtml = tradeValue(grid, impP, expP, price);
     const D = disp(grid);
     const acD = D.down(ac);
     const genD = D.down(gen);
@@ -617,6 +715,7 @@ async function renderBalance({ silent = false } = {}) {
       '<h3 class="sub-h">Różnica: produkcja − zapotrzebowanie</h3>' +
       '<div class="chart" id="diff-chart"></div>' +
       residHtml +
+      tradeHtml.html +
       table(['Okres', 'Zapotrzebowanie [MW]', 'Produkcja [MW]', 'Produkcja − zapotrz. [MW]', 'Eksport netto [MW]', 'Pompowanie [MW]', 'Niezbilansowane [MW]'],
         D.starts.map((_, i) => [D.lab(i), ...[acD[i], genD[i], diffD[i], expD[i], pumpD[i], restD[i]].map((v) => (v == null ? '—' : fmt0.format(v)))]));
     drawChart('bal', $('#bal-chart'), {
@@ -650,6 +749,7 @@ async function renderBalance({ silent = false } = {}) {
           { name: 'Niezbilansowane', value: mw(restD[i]) },
         ]),
       });
+    tradeHtml.draw();
     run.restore();
   } catch (e) {
     if (run.stale()) return;
@@ -1166,11 +1266,6 @@ async function renderCurt({ silent = false } = {}) {
     const totZ = pvZ.map((v, i) => (v == null ? null : v + wiZ[i]));
     const sumOf = (a) => a.reduce((s, v) => s + (v || 0), 0);
     const hasPrice = price.some((v) => v != null);
-    const zl = (v) => {
-      if (v == null) return '—';
-      const a = Math.abs(v);
-      return a >= 1e6 ? `${fmt2.format(v / 1e6)} mln zł` : a >= 1e4 ? `${fmt0.format(v / 1e3)} tys. zł` : `${fmt0.format(v)} zł`;
-    };
     const tiles = [
       { l: 'Ograniczona energia PV', v: `${fmt0.format(pvE)} MWh`, d: `bilansowo ${fmt0.format(energy[0])} · sieciowo ${fmt0.format(energy[1])}` },
       { l: 'Ograniczona energia wiatru', v: `${fmt0.format(wiE)} MWh`, d: `bilansowo ${fmt0.format(energy[2])} · sieciowo ${fmt0.format(energy[3])}` },
@@ -1197,7 +1292,7 @@ async function renderCurt({ silent = false } = {}) {
     if (hasPrice) drawChart('curt-pln', $('#curt-pln'), {
       n: D.n, series: [{ name: 'Wartość', color: 'var(--s1)', values: totZD }], bars: true, height: 200,
       barColor: (v) => (v >= 0 ? 'var(--s1)' : 'var(--exp)'),
-      yFmt: (v) => (Math.abs(v) >= 1e6 ? `${fmt2.format(v / 1e6)} mln` : Math.abs(v) >= 1e3 ? `${fmt0.format(v / 1e3)} tys.` : fmt0.format(v)),
+      yFmt: zlAxis,
       xTicks: D.ticks, label: `Wartość ograniczonej energii OZE po RCE, zł${zUnit}`, nowIndex: D.now,
       legendExtra: '<span class="key"><i class="sw" style="background:var(--s1)"></i>RCE dodatnia</span><span class="key"><i class="sw" style="background:var(--exp)"></i>RCE ujemna</span>',
       tooltip: (i) => tipRows(D.lab(i).replace(' (średnio)', '').replace(' (średnio w dobie)', ''), [
