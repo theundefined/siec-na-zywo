@@ -597,9 +597,9 @@ function tradeValue(grid, impP, expP, price) {
   const draw = () => {
     drawChart('trade', $('#trade-chart'), {
       n: D.n, bars: true, height: 220, xTicks: D.ticks, nowIndex: D.now, yFmt: zlAxis, legend: false,
-      series: [{ name: 'Import', color: 'var(--imp)', values: iZD }, { name: 'Eksport', color: 'var(--exp)', values: eZD.map((v) => (v == null ? null : -v)) }],
+      series: [{ name: 'Eksport', color: 'var(--exp)', values: eZD }, { name: 'Import', color: 'var(--imp)', values: iZD.map((v) => (v == null ? null : -v)) }],
       overlay: { color: 'var(--s4)', values: netD },
-      legendExtra: '<span class="key"><i class="sw" style="background:var(--imp)"></i>import (w górę)</span><span class="key"><i class="sw" style="background:var(--exp)"></i>eksport (w dół)</span><span class="key"><i class="sw" style="background:var(--s4)"></i>saldo eksport − import (powyżej zera zarabiamy)</span>',
+      legendExtra: '<span class="key"><i class="sw" style="background:var(--exp)"></i>eksport (w górę, przychód)</span><span class="key"><i class="sw" style="background:var(--imp)"></i>import (w dół, koszt)</span><span class="key"><i class="sw" style="background:var(--s4)"></i>saldo eksport − import (powyżej zera zarabiamy)</span>',
       label: `Wartość importu i eksportu energii po RCE, zł${zUnit}`,
       tooltip: (i) => tipRows(when(i), [
         { name: 'Import', color: 'var(--imp)', value: iZD[i] == null ? '—' : `${zl(iZD[i])} · ${fmt0.format(iED[i])} MWh` },
