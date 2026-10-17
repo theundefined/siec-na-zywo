@@ -63,6 +63,7 @@ export function hideTip() {
  * o.area       – delikatne wypełnienie pod pojedynczą linią
  * o.markers    – kropki w punktach (dla krótkich serii)
  * o.bars       – kolumny od zera; kolor słupka wg o.barColor(v)
+ * o.overlay    – {color, values}: linia nałożona na słupki (tylko z o.bars), uwzględniana w skali osi Y
  * o.band       – {a, b, pos, neg}: pasmo między seriami a i b, kolorowane znakiem różnicy
  * o.xTicks     – [{i, label, at}] albo funkcja (od, do) => [{i, label, at}] (gęstość wg powiększenia)
  * o.nowIndex   – indeks przedziału „teraz”
@@ -184,7 +185,8 @@ export function chart(container, o) {
     // Oś Y dopasowana do widocznego zakresu i widocznych serii.
     let lo = Infinity;
     let hi = -Infinity;
-    const scan = cum || series.map((s) => s.values);
+    const scan = [...(cum || series.map((s) => s.values))];
+    if (o.overlay) scan.push(o.overlay.values);
     for (const vals of scan)
       for (let i = Math.max(0, Math.floor(v0)); i < Math.min(n, Math.ceil(v1)); i++) {
         const v = vals[i];
@@ -262,6 +264,17 @@ export function chart(container, o) {
             el('rect', { x: X(i) + 0.5, y: Math.min(y, yb), width: bw, height: Math.max(0.5, Math.abs(y - yb)), style: `fill:${o.barColor ? o.barColor(v) : s.color}` }, plot);
           }
         });
+        if (o.overlay) {
+          let d = '';
+          let pen = false;
+          for (let i = i0; i < i1; i++) {
+            const v = o.overlay.values[i];
+            if (v == null) { pen = false; continue; }
+            d += `${pen ? 'L' : 'M'}${XC(i)},${Y(v)}`;
+            pen = true;
+          }
+          el('path', { d, class: 'line', style: `stroke:${o.overlay.color}` }, plot);
+        }
       } else
         series.forEach((s) => {
           const pts = [];

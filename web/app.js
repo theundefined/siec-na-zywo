@@ -591,29 +591,20 @@ function tradeValue(grid, impP, expP, price) {
   const ePD = kwhD(eZD, eED);
   const netD = eZD.map((v, i) => (v == null || iZD[i] == null ? null : v - iZD[i])); // saldo: > 0 zarabiamy, < 0 tracimy
   const html = head + tilesHtml(tiles) +
-    '<div class="chart" id="trade-chart"></div><div class="chart" id="trade-net"></div><div class="chart" id="trade-price"></div>' +
+    '<div class="chart" id="trade-chart"></div><div class="chart" id="trade-price"></div>' +
     table(['Doba', 'Import [MWh]', 'Import [zł]', 'Import [zł/kWh]', 'Eksport [MWh]', 'Eksport [zł]', 'Eksport [zł/kWh]', 'Eksport − import [zł]'], dayRows) +
     '<p class="note">Wartość = energia przepływająca przez granice w kwadransie (przepływy fizyczne brutto, osobno każdy kierunek na każdej granicy) × rynkowa cena energii (RCE) w tym kwadransie; zł/kWh to średnia ważona energią. To wycena rynkowa, a nie kwoty faktycznie zapłacone w handlu transgranicznym (rozliczanym w ramach łączenia rynków i kontraktów), a przepływy fizyczne różnią się od wymiany handlowej. Przy ujemnej RCE wartość jest ujemna. Liczymy tylko kwadranse, dla których są i przepływy, i ceny — doby oznaczone „niepełna” mają braki danych.</p>';
   const draw = () => {
     drawChart('trade', $('#trade-chart'), {
       n: D.n, bars: true, height: 220, xTicks: D.ticks, nowIndex: D.now, yFmt: zlAxis, legend: false,
       series: [{ name: 'Import', color: 'var(--imp)', values: iZD }, { name: 'Eksport', color: 'var(--exp)', values: eZD.map((v) => (v == null ? null : -v)) }],
-      legendExtra: '<span class="key"><i class="sw" style="background:var(--imp)"></i>import (w górę)</span><span class="key"><i class="sw" style="background:var(--exp)"></i>eksport (w dół)</span>',
+      overlay: { color: 'var(--s4)', values: netD },
+      legendExtra: '<span class="key"><i class="sw" style="background:var(--imp)"></i>import (w górę)</span><span class="key"><i class="sw" style="background:var(--exp)"></i>eksport (w dół)</span><span class="key"><i class="sw" style="background:var(--s4)"></i>saldo eksport − import (powyżej zera zarabiamy)</span>',
       label: `Wartość importu i eksportu energii po RCE, zł${zUnit}`,
       tooltip: (i) => tipRows(when(i), [
         { name: 'Import', color: 'var(--imp)', value: iZD[i] == null ? '—' : `${zl(iZD[i])} · ${fmt0.format(iED[i])} MWh` },
         { name: 'Eksport', color: 'var(--exp)', value: eZD[i] == null ? '—' : `${zl(eZD[i])} · ${fmt0.format(eED[i])} MWh` },
-        { name: 'Eksport − import', value: iZD[i] == null ? '—' : zl(eZD[i] - iZD[i]) },
-      ]),
-    });
-    drawChart('trade-net', $('#trade-net'), {
-      n: D.n, bars: true, height: 180, xTicks: D.ticks, nowIndex: D.now, yFmt: zlAxis, legend: false,
-      barColor: (v) => (v >= 0 ? 'var(--s3)' : 'var(--s2)'),
-      series: [{ name: 'Eksport − import', color: 'var(--s3)', values: netD }],
-      legendExtra: '<span class="key"><i class="sw" style="background:var(--s3)"></i>zarabiamy (eksport &gt; import)</span><span class="key"><i class="sw" style="background:var(--s2)"></i>tracimy (import &gt; eksport)</span>',
-      label: `Saldo wartości eksportu i importu energii po RCE, zł${zUnit}`,
-      tooltip: (i) => tipRows(when(i), [
-        { name: netD[i] != null && netD[i] < 0 ? 'Tracimy' : 'Zarabiamy', color: netD[i] != null && netD[i] < 0 ? 'var(--s2)' : 'var(--s3)', value: netD[i] == null ? '—' : `${netD[i] >= 0 ? '+' : '−'}${zl(Math.abs(netD[i]))}` },
+        { name: netD[i] != null && netD[i] < 0 ? 'Saldo: tracimy' : 'Saldo: zarabiamy', color: 'var(--s4)', value: netD[i] == null ? '—' : `${netD[i] >= 0 ? '+' : '−'}${zl(Math.abs(netD[i]))}` },
       ]),
     });
     drawChart('trade-price', $('#trade-price'), {
