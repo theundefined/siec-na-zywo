@@ -589,6 +589,7 @@ function tradeValue(grid, impP, expP, price) {
   const kwhD = (z, e) => z.map((v, i) => (v == null || !(e[i] > 0) ? null : v / e[i] / 1000));
   const iPD = kwhD(iZD, iED);
   const ePD = kwhD(eZD, eED);
+  const netD = eZD.map((v, i) => (v == null || iZD[i] == null ? null : v - iZD[i])); // saldo: > 0 zarabiamy, < 0 tracimy
   const html = head + tilesHtml(tiles) +
     '<div class="chart" id="trade-chart"></div><div class="chart" id="trade-price"></div>' +
     table(['Doba', 'Import [MWh]', 'Import [zł]', 'Import [zł/kWh]', 'Eksport [MWh]', 'Eksport [zł]', 'Eksport [zł/kWh]', 'Eksport − import [zł]'], dayRows) +
@@ -597,12 +598,13 @@ function tradeValue(grid, impP, expP, price) {
     drawChart('trade', $('#trade-chart'), {
       n: D.n, bars: true, height: 220, xTicks: D.ticks, nowIndex: D.now, yFmt: zlAxis, legend: false,
       series: [{ name: 'Import', color: 'var(--imp)', values: iZD }, { name: 'Eksport', color: 'var(--exp)', values: eZD.map((v) => (v == null ? null : -v)) }],
-      legendExtra: '<span class="key"><i class="sw" style="background:var(--imp)"></i>import (w górę)</span><span class="key"><i class="sw" style="background:var(--exp)"></i>eksport (w dół)</span>',
+      overlay: { color: 'var(--s4)', values: netD },
+      legendExtra: '<span class="key"><i class="sw" style="background:var(--imp)"></i>import (w górę)</span><span class="key"><i class="sw" style="background:var(--exp)"></i>eksport (w dół)</span><span class="key"><i class="sw" style="background:var(--s4)"></i>saldo eksport − import (powyżej zera zarabiamy)</span>',
       label: `Wartość importu i eksportu energii po RCE, zł${zUnit}`,
       tooltip: (i) => tipRows(when(i), [
         { name: 'Import', color: 'var(--imp)', value: iZD[i] == null ? '—' : `${zl(iZD[i])} · ${fmt0.format(iED[i])} MWh` },
         { name: 'Eksport', color: 'var(--exp)', value: eZD[i] == null ? '—' : `${zl(eZD[i])} · ${fmt0.format(eED[i])} MWh` },
-        { name: 'Eksport − import', value: iZD[i] == null ? '—' : zl(eZD[i] - iZD[i]) },
+        { name: netD[i] != null && netD[i] < 0 ? 'Saldo: tracimy' : 'Saldo: zarabiamy', color: 'var(--s4)', value: netD[i] == null ? '—' : `${netD[i] >= 0 ? '+' : '−'}${zl(Math.abs(netD[i]))}` },
       ]),
     });
     drawChart('trade-price', $('#trade-price'), {
