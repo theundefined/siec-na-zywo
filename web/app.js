@@ -1379,6 +1379,12 @@ async function renderFcst({ silent = false } = {}) {
         { name: 'Produkcja możliwa (z redukcjami)', color: 'var(--exp)', values: D.down(pot) },
         { name: 'Produkcja', color: src.color, values: D.down(act) },
       ];
+      // Błąd prosty (ze znakiem) = prognoza − produkcja możliwa; dodatni = prognoza zawyżona.
+      const errOf = (f) => D.down(f.map((v, i) => (v == null || pot[i] == null ? null : v - pot[i])));
+      const errSeries = [
+        { name: 'Błąd prognozy D-1', color: 'var(--s1)', values: errOf(fP) },
+        { name: 'Błąd prognozy bieżącej', color: 'var(--s7)', values: errOf(fW) },
+      ];
       const cutD = D.down(act.map((v, i) => (v == null ? null : cut[i] || 0)));
       const tiles = [
         sP && { l: 'Średni błąd prognozy D-1', v: mw(sP.mae), d: sP.rel == null ? '' : `${fmt0.format(sP.rel)}% średniej możliwej produkcji` },
@@ -1386,10 +1392,10 @@ async function renderFcst({ silent = false } = {}) {
         sW && { l: 'Średni błąd prognozy bieżącej', v: mw(sW.mae), d: sW.bias == null ? '' : `energia ${pct(sW.bias)} względem możliwej produkcji` },
         has && { l: 'Redukcje poleceniem PSE', v: en(cutE), d: actE + cutE > 0 ? `${fmt0.format((cutE / (actE + cutE)) * 100)}% możliwej produkcji · wyprodukowano ${en(actE)}` : 'brak produkcji w okresie' },
       ];
-      return { src, series, cutD, tiles, has };
+      return { src, series, errSeries, cutD, tiles, has };
     });
     box.innerHTML = (!parts[0].has ? empty(date > todayIso() ? 'Pomiary produkcji pojawiają się w trakcie doby — poniżej tylko prognozy.' : 'Brak pomiarów produkcji dla wybranego okresu — poniżej tylko prognozy.') : '') +
-      parts.map((p) => `<h3 class="sub-h">${p.src.name}</h3>${tilesHtml(p.tiles)}<div class="chart" id="fcst-${p.src.key}"></div>`).join('') +
+      parts.map((p) => `<h3 class="sub-h">${p.src.name}</h3>${tilesHtml(p.tiles)}<div class="chart" id="fcst-${p.src.key}"></div><div class="chart" id="fcst-err-${p.src.key}"></div>`).join('') +
       table(['Okres', ...parts.flatMap((p) => [`${p.src.name}: prognoza D-1`, 'prognoza bieżąca', 'produkcja', 'redukcje'])], D.starts.map((_, i) => [D.lab(i), ...parts.flatMap((p) => [p.series[0].values[i], p.series[1].values[i], p.series[3].values[i], p.cutD[i]].map((v) => (v == null ? '—' : fmt0.format(v))))])) +
       '<p class="note">Prognoza D-1 — plan koordynacyjny dobowy PSE sporządzony dzień wcześniej (pdgopkd); prognoza bieżąca — plan koordynacyjny pk5l-wp (ten sam co w sekcji „Prognoza PSE na 7 dni”), dla minionych godzin w ostatniej wersji sprzed danej godziny, godzinowo; w dniach dużych redukcji bywa wyraźnie niższa od produkcji możliwej, a nawet od rzeczywistej (np. PV 3.05.2026) — możliwe, że uwzględnia redukcje planowane przez PSE, czego PSE nie opisuje. ' +
       'Prognozy porównujemy z produkcją możliwą, czyli rzeczywistą produkcją powiększoną o redukcje poleceniem PSE (zacieniowane pasmo; sekcja „Redukcje generacji OZE”) — bez nich prognoza w godzinach redukcji wyglądałaby na zawyżoną. ' +
@@ -1406,6 +1412,13 @@ async function renderFcst({ silent = false } = {}) {
           { name: 'Redukcje PSE', value: mw(p.cutD[i]) },
           S[0].values[i] != null && S[2].values[i] != null ? { name: 'Błąd prognozy D-1', value: `${S[0].values[i] >= S[2].values[i] ? '+' : '−'}${mw(Math.abs(S[0].values[i] - S[2].values[i]))}` } : null,
         ].filter(Boolean)),
+      });
+    }
+    for (const p of parts) {
+      drawChart(`fcst-err-${p.src.key}`, $(`#fcst-err-${p.src.key}`), {
+        n: D.n, series: p.errSeries, xTicks: D.ticks, height: 180, nowIndex: D.now,
+        label: `${p.src.name}: błąd prognozy (prognoza − produkcja możliwa), MW${D.unit}`,
+        tooltip: (i, on) => tipRows(D.lab(i), p.errSeries.filter((s) => on(s.name)).map((s) => ({ name: s.name, color: s.color, value: s.values[i] == null ? '—' : `${s.values[i] >= 0 ? '+' : '−'}${mw(Math.abs(s.values[i]))}` }))),
       });
     }
     run.restore();
