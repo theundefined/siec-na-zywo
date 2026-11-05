@@ -53,7 +53,7 @@ export function table(head, rows) {
 }
 
 export function tilesHtml(tiles) {
-  return `<div class="tiles">${tiles.filter(Boolean).map((t) => `<div class="tile"><div class="tl">${t.l}</div><div class="tv">${t.v}</div>${t.d ? `<div class="td">${t.d}</div>` : ''}</div>`).join('')}</div>`;
+  return `<div class="tiles">${tiles.filter(Boolean).map((t) => `<${t.go ? `a href="#${t.go}" data-goto="${t.go}" class="tile link"` : 'div class="tile"'}><div class="tl">${t.l}</div><div class="tv">${t.v}</div>${t.d ? `<div class="td">${t.d}</div>` : ''}${t.go ? '<div class="tgo">wykres ›</div>' : ''}</${t.go ? 'a' : 'div'}>`).join('')}</div>`;
 }
 
 // ---------- Wykresy ----------
@@ -201,18 +201,19 @@ export const EU_NAMES = { EU27_2020: 'UE-27', BE: 'Belgia', BG: 'Bułgaria', CZ:
 // Sekcje i linki spisu treści mają data-view="d|m|r"; zakładka w parametrze ?v= (hash zajmują kotwice sekcji).
 // onShow[v] wywoływane przy pierwszym otwarciu zakładki (dane ładowane dopiero wtedy).
 export const VIEWS = { d: 'Dzienne', m: 'Miesięczne', r: 'Roczne' };
-export function initTabs(onShow) {
+// views — mapa zakładek (domyślnie VIEWS), def — zakładka otwierana bez ?v=. Zwraca {get, show}.
+export function initTabs(onShow, { views: tabs = VIEWS, def = 'd' } = {}) {
   const nav = $('#views');
   let v = new URLSearchParams(location.search).get('v');
-  if (!VIEWS[v]) v = 'd';
+  if (!tabs[v]) v = def;
   const shown = new Set();
-  nav.innerHTML = Object.entries(VIEWS).map(([k, l]) => `<button type="button" role="tab" data-v="${k}">${l}</button>`).join('');
+  nav.innerHTML = Object.entries(tabs).map(([k, l]) => `<button type="button" role="tab" data-v="${k}">${l}</button>`).join('');
   const show = (nv) => {
     v = nv;
     nav.querySelectorAll('button').forEach((b) => { const on = b.dataset.v === v; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
     document.querySelectorAll('[data-view]').forEach((el) => { el.hidden = !el.dataset.view.split(' ').includes(v); });
     const url = new URL(location.href);
-    if (v === 'd') url.searchParams.delete('v');
+    if (v === def) url.searchParams.delete('v');
     else url.searchParams.set('v', v);
     history.replaceState(null, '', url);
     if (!shown.has(v)) { shown.add(v); onShow[v]?.(); }
@@ -221,7 +222,7 @@ export function initTabs(onShow) {
   };
   nav.addEventListener('click', (e) => { const b = e.target.closest('button[data-v]'); if (b && b.dataset.v !== v) show(b.dataset.v); });
   show(v);
-  return () => v;
+  return { get: () => v, show: (nv) => nv !== v && tabs[nv] && show(nv) };
 }
 
 // Usuwa przerysowania wykresów z podanych grup (np. przy zmianie dnia), zostawiając pozostałe zakładki.
