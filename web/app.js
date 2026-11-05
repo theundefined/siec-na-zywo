@@ -1021,9 +1021,9 @@ async function drawNow() {
     $('#now-time').textContent = `stan na ${fTime.format(ts)}`;
     const st = j.data.status_pse_w_platformach_bilansujacych || {};
     const tiles = [
-      { l: 'Zapotrzebowanie', v: mw(p.zapotrzebowanie), d: '' },
-      { l: 'Generacja', v: mw(p.generacja), d: '' },
-      { l: saldo < 0 ? 'Saldo wymiany: eksport' : 'Saldo wymiany: import', v: mw(Math.abs(saldo)), d: 'suma przepływów fizycznych' },
+      { l: 'Zapotrzebowanie', v: mw(p.zapotrzebowanie), d: '', go: 'load' },
+      { l: 'Generacja', v: mw(p.generacja), d: '', go: 'gen' },
+      { l: saldo < 0 ? 'Saldo wymiany: eksport' : 'Saldo wymiany: import', v: mw(Math.abs(saldo)), d: 'suma przepływów fizycznych', go: 'bal' },
       { l: 'Częstotliwość', v: `${String(p.czestotliwosc).replace('.', ',')} Hz`, d: `odchyłka ${p.czestotliwosc >= 50 ? '+' : '−'}${fmt0.format(Math.abs(p.czestotliwosc - 50) * 1000)} mHz` },
     ];
 
@@ -1046,7 +1046,7 @@ async function drawNow() {
         const planPos = pctMode ? (loadOf(f.id, f.wartosc_plan) == null ? null : Math.sign(f.wartosc_plan) * Math.min(102, loadOf(f.id, f.wartosc_plan)) / 2) : (f.wartosc_plan / maxAbs) * 50;
         const plan = planPos == null ? '' : `<span class="fplan" style="left:${50 + planPos}%" title="Plan: ${fmt0.format(f.wartosc_plan)} MW"></span>`;
         const txt = `${imp ? 'import' : 'eksport'} <b>${fmt0.format(Math.abs(f.wartosc))} MW</b>${pctTxt(load)} <span class="muted">plan ${f.wartosc_plan >= 0 ? 'import' : 'eksport'} ${fmt0.format(Math.abs(f.wartosc_plan))}</span>${noRef ? ' <span class="muted">· brak danych o punkcie odniesienia</span>' : ''}`;
-        return `<div class="frow" data-id="${esc(f.id)}" data-tip="${esc(`${COUNTRIES[f.id] || f.id}|${f.wartosc}|${f.wartosc_plan}|${f.rownolegly}`)}">
+        return `<div class="frow" data-goto="bal" title="Pokaż wykres wymiany z dnia" data-id="${esc(f.id)}" data-tip="${esc(`${COUNTRIES[f.id] || f.id}|${f.wartosc}|${f.wartosc_plan}|${f.rownolegly}`)}">
           <div class="fname">${COUNTRIES[f.id] || f.id}${f.rownolegly ? '<sup title="Profil synchroniczny (DE+CZ+SK) — handel odbywa się łącznie na tym przekroju">*</sup>' : ''}</div>
           <div class="ftrack${pctMode ? ' pct' : ''}">${bar}${plan}<span class="fzero"></span></div>
           <div class="fval">${txt}</div></div>`;
@@ -1074,7 +1074,7 @@ async function drawNow() {
     ].sort((a, b) => b.v - a.v);
     const mixMax = Math.max(...mix.map((m) => m.v), 1);
     const mixRows = mix
-      .map((m) => `<div class="mrow"><div class="mname">${m.n}</div><div class="mtrack"><span class="mbar" style="width:${(m.v / mixMax) * 100}%"></span></div><div class="mval">${fmt0.format(m.v)} MW <span class="muted">${fmt0.format((m.v / p.generacja) * 100)}%</span></div></div>`)
+      .map((m) => `<div class="mrow" data-goto="gen" title="Pokaż wykres struktury generacji z dnia"><div class="mname">${m.n}</div><div class="mtrack"><span class="mbar" style="width:${(m.v / mixMax) * 100}%"></span></div><div class="mval">${fmt0.format(m.v)} MW <span class="muted">${fmt0.format((m.v / p.generacja) * 100)}%</span></div></div>`)
       .join('');
     const status = (v) => (v === 1 ? '<span class="ok">● aktywny</span>' : `<span class="off">○ nieaktywny (${esc(v)})</span>`);
 
@@ -1089,6 +1089,9 @@ async function drawNow() {
         <div><h3>Aktualna struktura generacji</h3><div class="mix">${mixRows}</div>
           <p class="note">Platformy bilansujące — IGCC: ${status(st.IGCC_status)} · CMO: ${status(st.CMO_status)}</p></div>
       </div>`;
+    box.querySelectorAll('[data-goto]').forEach((el) =>
+      el.addEventListener('click', (e) => { e.preventDefault(); goDaily(el.dataset.goto); }),
+    );
     box.querySelectorAll('.seg button').forEach((b) =>
       b.addEventListener('click', () => {
         flowRef = b.dataset.ref;
@@ -1489,7 +1492,7 @@ async function renderUnits({ silent = false } = {}) {
       return t;
     }) })).filter((s) => s.values.some((v) => v > 0));
     const eMax = list[0]?.gen || 1;
-    const rowHtml = (p) => `<div class="mrow"><div class="mname"><i class="sw" style="background:${FUELS[p.fuel].color}"></i> ${esc(p.name)} <span class="muted">· ${FUELS[p.fuel].name} · ${p.units.size} ${plural(p.units.size, ['blok', 'bloki', 'bloków'])}</span></div><div class="mtrack"><span class="mbar" style="width:${(p.gen / eMax) * 100}%;background:${FUELS[p.fuel].color}"></span></div><div class="mval">${fmt2.format(p.gen / 1000)} GWh <span class="muted">śr. ${fmt0.format(p.avg)} · maks. ${fmt0.format(p.max)} MW${p.pump ? ` · pompowanie ${fmt0.format(p.pump)} MWh` : ''}</span></div></div>`;
+    const rowHtml = (p) => `<div class="mrow" data-goto="gen" title="Pokaż wykres struktury generacji z dnia"><div class="mname"><i class="sw" style="background:${FUELS[p.fuel].color}"></i> ${esc(p.name)} <span class="muted">· ${FUELS[p.fuel].name} · ${p.units.size} ${plural(p.units.size, ['blok', 'bloki', 'bloków'])}</span></div><div class="mtrack"><span class="mbar" style="width:${(p.gen / eMax) * 100}%;background:${FUELS[p.fuel].color}"></span></div><div class="mval">${fmt2.format(p.gen / 1000)} GWh <span class="muted">śr. ${fmt0.format(p.avg)} · maks. ${fmt0.format(p.max)} MW${p.pump ? ` · pompowanie ${fmt0.format(p.pump)} MWh` : ''}</span></div></div>`;
     const D = disp(grid);
     const seriesD = series.map((x) => ({ ...x, values: D.down(x.values) }));
     const fuelSeriesD = fuelSeries.map((x) => ({ ...x, values: D.down(x.values) }));
@@ -2025,11 +2028,19 @@ initInstall();
 initCountry();
 renderAlert();
 // Zakładki: dane dzienne ładujemy od razu (domyślny widok i odświeżanie), miesięczne i roczne — przy pierwszym otwarciu.
-initTabs({
-  d: () => { setRange(date, days); renderNow(); renderCo2(); },
+const tabs = initTabs({
+  n: () => renderNow(),
+  d: () => { setRange(date, days); renderCo2(); },
   m: () => { renderRcem(); renderMix(); },
   r: () => { renderElecYear(); renderRenYear(); renderBills(); },
-});
+}, { views: { n: 'Teraz', d: 'Dzienne', m: 'Miesięczne', r: 'Roczne' }, def: 'n' });
+
+// Przejście z danych bieżących do wykresu tej wielkości w zakładce dziennej (dla dzisiejszej doby).
+function goDaily(id) {
+  tabs.show('d');
+  if (!(from <= todayIso() && todayIso() <= date)) setRange(todayIso(), 1);
+  requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })));
+}
 
 // Odświeżanie: bilans co minutę, dane doby co 5 minut (gdy oglądamy dziś).
 setInterval(renderNow, 60e3);
