@@ -14,6 +14,8 @@ import json
 import pathlib
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
@@ -22,10 +24,22 @@ PUBLISHED = 'https://theundefined.github.io/siec-na-zywo/data'
 UA = 'siec-na-zywo (+https://github.com/theundefined/siec-na-zywo)'
 
 
-def get(url, timeout=60):
+def get(url, timeout=60, tries=3):
     req = urllib.request.Request(url, headers={'User-Agent': UA})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode('utf-8')
+    for attempt in range(1, tries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode('utf-8')
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == tries:  # 4xx to nie chwilowa awaria — nie ponawiamy
+                raise
+            err = e
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if attempt == tries:
+                raise
+            err = e
+        print(f'{url}: próba {attempt}/{tries} nieudana ({err!r}), ponawiam', file=sys.stderr)
+        time.sleep(2 * attempt)
 
 
 def now():
