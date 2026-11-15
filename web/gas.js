@@ -10,11 +10,13 @@ const OPERATORS = ['PL-TSO-0002', 'PL-TSO-0001'];
 // ENTSOG archiwizuje dane starsze niż 5 lat (API zwraca wtedy komunikat zamiast danych).
 const MAX_HISTORY = 1820;
 
-// Dłuższe okresy pobieramy porcjami po roku (duże zapytania z limit=-1 bywają odrzucane).
+// Dłuższe okresy pobieramy porcjami po ok. 4 miesiące: ENTSOG po cichu ucina odpowiedź (HTTP 200) po ok. 14 tys. rekordów
+// (roczne zapytanie traciło wrzesień–październik), a duże zapytania z limit=-1 bywają też odrzucane.
+const CHUNK_DAYS = 120;
 // Każda porcja jest przetwarzana od razu (onRows), żeby przy 5 latach nie trzymać w pamięci wszystkich surowych rekordów.
 async function entsogRange(operator, from, to, onRows) {
-  for (let a = from; a <= to; a = addDays(a, 366)) {
-    const b = addDays(a, 365) < to ? addDays(a, 365) : to;
+  for (let a = from; a <= to; a = addDays(a, CHUNK_DAYS)) {
+    const b = addDays(a, CHUNK_DAYS - 1) < to ? addDays(a, CHUNK_DAYS - 1) : to;
     onRows(await entsog(operator, a, b));
   }
 }
